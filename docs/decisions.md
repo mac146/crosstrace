@@ -32,3 +32,8 @@ Running log. Newest at the bottom. Each entry: decision, why.
 ## D6. Stage 0 tracer is a plain span recorder, not OTel
 - Fields mirror OTel (name, kind, start/end, pid, tid, attrs) so Stage 1 can swap it mechanically.
 - Timestamps are wall-clock `time.time_ns()`. Clock alignment with kernel events (monotonic clock) is a Stage 3 problem.
+
+## D7. Storage: SQLite (2026-11-05)
+- User's choice over DuckDB. Stdlib, no extra dependency, fine for the data volume (thousands of runs).
+- Database files live on the WSL-native filesystem, not `/mnt/c` (see D2), because of file-locking issues on the 9p mount.
+- Revisit only if eval queries get slow.
