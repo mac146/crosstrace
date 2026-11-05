@@ -1,8 +1,11 @@
 """The agent's three tools: SQLite query, external HTTP API, configurable slow tool."""
+import http.client
 import json
 import sqlite3
 import time
-import urllib.request
+from urllib.parse import urlparse
+
+from agent.dns import resolve
 
 
 def seed_db(path):
@@ -17,21 +20,38 @@ def seed_db(path):
 
 
 class Tools:
-    def __init__(self, db_path, api_url, slow_extra_ms=0):
+    def __init__(self, db_path, api_url, dns_server, tracing, slow_extra_ms=0):
         self.db_path = db_path
         self.api_url = api_url
+        self.dns_server = dns_server
+        self.tracing = tracing
         self.slow_extra_ms = slow_extra_ms  # slow_tool fault hook
 
     def db_query(self, sql):
-        con = sqlite3.connect(self.db_path)
-        try:
-            return json.dumps(con.execute(sql).fetchall())
-        finally:
-            con.close()
+        attrs = {"db.system.name": "sqlite", "db.query.text": sql}
+        with self.tracing.span("SELECT orders", attrs, client=True):
+            con = sqlite3.connect(self.db_path, timeout=10)  # waits on a locked db
+            try:
+                return json.dumps(con.execute(sql).fetchall())
+            finally:
+                con.close()
 
     def http_api(self, path):
-        with urllib.request.urlopen(f"{self.api_url}{path}", timeout=30) as r:
-            return r.read().decode()
+        u = urlparse(self.api_url)
+        attrs = {"http.request.method": "GET", "server.address": u.hostname,
+                 "server.port": u.port, "url.full": f"{self.api_url}{path}"}
+        with self.tracing.span("GET", attrs, client=True) as span:
+            # DNS lookup, TCP connect and the request all happen inside this one span:
+            # an app-level tracer has no separate view of them.
+            ip = resolve(u.hostname, self.dns_server)
+            conn = http.client.HTTPConnection(ip, u.port, timeout=30)
+            try:
+                conn.request("GET", path, headers={"Host": u.hostname})
+                resp = conn.getresponse()
+                span.set_attribute("http.response.status_code", resp.status)
+                return resp.read().decode()
+            finally:
+                conn.close()
 
     def slow_tool(self, work_ms):
         time.sleep((work_ms + self.slow_extra_ms) / 1000)

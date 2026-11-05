@@ -84,4 +84,6 @@ if __name__ == "__main__":
     ap.add_argument("--delay-ms", type=int, default=0)
     ap.add_argument("--rate-limit-first", type=int, default=0)
     a = ap.parse_args()
-    make_server(a.port, a.delay_ms, a.rate_limit_first).serve_forever()
+    srv = make_server(a.port, a.delay_ms, a.rate_limit_first)
+    print("READY", flush=True)
+    srv.serve_forever()

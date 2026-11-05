@@ -2,7 +2,7 @@
 name = "crosstrace"
 version = "0.0.1"
 requires-python = ">=3.11"
-dependencies = []  # Stage 0 is stdlib-only
+dependencies = ["opentelemetry-sdk==1.45.2"]
 
 [project.optional-dependencies]
 dev = ["pytest"]

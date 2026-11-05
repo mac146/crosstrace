@@ -42,4 +42,6 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=8802)
     ap.add_argument("--delay-ms", type=int, default=0)
     a = ap.parse_args()
-    make_server(a.port, a.delay_ms).serve_forever()
+    srv = make_server(a.port, a.delay_ms)
+    print("READY", flush=True)
+    srv.serve_forever()

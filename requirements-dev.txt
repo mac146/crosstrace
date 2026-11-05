@@ -1,5 +1,9 @@
 iniconfig==2.3.1
+opentelemetry-api==1.45.2
+opentelemetry-sdk==1.45.2
+opentelemetry-semantic-conventions==0.66b2
 packaging==26.3
 pluggy==1.7.0
 Pygments==2.21.0
 pytest==9.2.0
+typing_extensions==4.16.0
