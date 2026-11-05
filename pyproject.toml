@@ -1,0 +1,12 @@
+[project]
+name = "crosstrace"
+version = "0.0.1"
+requires-python = ">=3.11"
+dependencies = []  # Stage 0 is stdlib-only
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
