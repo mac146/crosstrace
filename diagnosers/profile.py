@@ -28,3 +28,21 @@ def build_profile(runs_spans):
     if not samples:
         raise ValueError("empty calibration set")
     return {k: max(_p99(v), 3 * statistics.median(v)) + MARGIN_MS for k, v in samples.items()}
+
+
+def _threshold(values):
+    return max(_p99(values), 3 * statistics.median(values)) + MARGIN_MS
+
+
+def build_kernel_profile(breakdowns):
+    """Healthy thresholds for kernel-derived signals, same rule as the step thresholds.
+
+    breakdowns: correlator.join.breakdown() dicts of HTTP spans from healthy runs.
+    Keys: dns_ms (hostname lookups only), srtt_ms (largest smoothed RTT), server_wait_ms.
+    """
+    dns = [b["dns_ms"] for b in breakdowns if b["dns_ms"] is not None]
+    srtt = [b["srtt_max_ms"] for b in breakdowns if b["srtt_max_ms"] is not None]
+    wait = [b["server_wait_ms"] for b in breakdowns if b["server_wait_ms"] is not None]
+    if not (dns and srtt and wait):
+        raise ValueError("calibration runs carry no kernel evidence")
+    return {"dns_ms": _threshold(dns), "srtt_ms": _threshold(srtt), "server_wait_ms": _threshold(wait)}

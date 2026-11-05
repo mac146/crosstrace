@@ -56,3 +56,19 @@ def render(spans):
                      f"{(s['end_ns'] - s['start_ns']) / 1e6:9.1f}ms "
                      f"pid={s['attrs'].get('process.pid')} tid={s['attrs'].get('thread.id')}")
     return "\n".join(lines)
+
+
+class _NoopSpan:
+    def set_attribute(self, *a, **k):
+        pass
+
+
+class NoopTracing:
+    """Same interface as Tracing, records nothing. The 'untraced' arm of the overhead measurement."""
+
+    @contextlib.contextmanager
+    def span(self, name, attrs=None, client=False):
+        yield _NoopSpan()
+
+    def spans(self):
+        return []

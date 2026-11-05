@@ -212,7 +212,7 @@ def breakdown(entry):
     srtt = [e["srtt_us"] for e in ev if e["ev"] == "tcp_rtt"]
     resp = _resp_gap_ms(ev, entry.span["attrs"]["server.port"])
     explained = sum(x for x in (dns, conn, resp) if x is not None)
-    return {"span_ms": span_ms, "dns_ms": dns, "connect_ms": conn,
+    return {"span_ms": span_ms, "n_events": len(ev), "dns_ms": dns, "connect_ms": conn,
             "retransmits": sum(e["ev"] == "tcp_retransmit" for e in ev),
             "srtt_max_ms": max(srtt) / 1000 if srtt else None,
             "server_wait_ms": resp, "unexplained_ms": span_ms - explained}
