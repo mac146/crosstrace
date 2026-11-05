@@ -1,0 +1,97 @@
+#!/usr/bin/env bpftrace
+/*
+ * Kernel-side collector: DNS, TCP connect, TCP retransmits, TCP RTT samples.
+ * REQUIRES ROOT. Run through collectors/ebpf.py, which fills in the DNS port condition below.
+ *
+ * Output: one JSON object per line on stdout. Field "t" is CLOCK_MONOTONIC in ns (bpftrace `nsecs`);
+ * the Python wrapper records monotonic<->wall clock pairs so the correlator can align with OTel spans.
+ *
+ * Events and what identifies the process:
+ *   dns_query / dns_response  pid,tid from the syscall (exact). dns_response has lat_ns.
+ *   tcp_connect_start         pid,tid from the kprobe on tcp_v4_connect (exact).
+ *   tcp_connect_end           pid,tid recovered from the socket recorded at connect start. lat_ns.
+ *   tcp_retransmit            pid,tid only if the socket was seen at connect start (client side), else 0
+ *                             (timers/softirq: the "current" task there is unrelated, so we do not report it).
+ *   tcp_rtt                   no process info (tcp_probe has no socket pointer): match by 4-tuple only.
+ * dport/sport are host byte order.
+ */
+
+BEGIN {
+  printf("{\"ev\":\"ready\",\"t\":%llu}\n", nsecs);
+}
+
+/* ---- DNS: UDP sendto() with an explicit destination, then the next recvfrom() on that thread ---- */
+tracepoint:syscalls:sys_enter_sendto
+/args->addr != 0/
+{
+  $sa = (struct sockaddr_in *)args->addr;
+  $port = (($sa->sin_port >> 8) & 0xff) | (($sa->sin_port & 0xff) << 8);
+  if ($sa->sin_family == 2 && (@@DNS_COND@@)) {
+    @dns_t[tid] = nsecs;
+    printf("{\"ev\":\"dns_query\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"comm\":\"%s\",\"daddr\":\"%s\",\"dport\":%d}\n",
+           nsecs, pid, tid, comm, ntop($sa->sin_addr.s_addr), $port);
+  }
+}
+
+tracepoint:syscalls:sys_exit_recvfrom
+/@dns_t[tid] != 0/
+{
+  printf("{\"ev\":\"dns_response\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"comm\":\"%s\",\"bytes\":%d,\"lat_ns\":%llu}\n",
+         nsecs, pid, tid, comm, args->ret, nsecs - @dns_t[tid]);
+  delete(@dns_t[tid]);
+}
+
+/* ---- TCP connect (client side) ---- */
+kprobe:tcp_v4_connect
+{
+  $sk = (uint64)arg0;
+  $sa = (struct sockaddr_in *)arg1;
+  $port = (($sa->sin_port >> 8) & 0xff) | (($sa->sin_port & 0xff) << 8);
+  @c_t[$sk] = nsecs;
+  @o_pid[$sk] = pid;
+  @o_tid[$sk] = tid;
+  printf("{\"ev\":\"tcp_connect_start\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"comm\":\"%s\",\"daddr\":\"%s\",\"dport\":%d}\n",
+         nsecs, pid, tid, comm, ntop($sa->sin_addr.s_addr), $port);
+}
+
+/* SYN_SENT (2) -> ESTABLISHED (1): the three-way handshake finished */
+tracepoint:sock:inet_sock_set_state
+/args->protocol == 6 && args->oldstate == 2 && args->newstate == 1 && @c_t[(uint64)args->skaddr] != 0/
+{
+  $sk = (uint64)args->skaddr;
+  printf("{\"ev\":\"tcp_connect_end\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"saddr\":\"%s\",\"sport\":%d,\"daddr\":\"%s\",\"dport\":%d,\"lat_ns\":%llu}\n",
+         nsecs, @o_pid[$sk], @o_tid[$sk], ntop(args->saddr), args->sport, ntop(args->daddr), args->dport,
+         nsecs - @c_t[$sk]);
+  delete(@c_t[$sk]);
+}
+
+/* socket closed: forget its owner */
+tracepoint:sock:inet_sock_set_state
+/args->protocol == 6 && args->newstate == 7/
+{
+  $sk = (uint64)args->skaddr;
+  delete(@c_t[$sk]);
+  delete(@o_pid[$sk]);
+  delete(@o_tid[$sk]);
+}
+
+/* ---- TCP retransmits (either side) ---- */
+tracepoint:tcp:tcp_retransmit_skb
+{
+  $sk = (uint64)args->skaddr;
+  printf("{\"ev\":\"tcp_retransmit\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"saddr\":\"%s\",\"sport\":%d,\"daddr\":\"%s\",\"dport\":%d,\"state\":%d}\n",
+         nsecs, @o_pid[$sk], @o_tid[$sk], ntop(args->saddr), args->sport, ntop(args->daddr), args->dport, args->state);
+}
+
+/* ---- TCP smoothed RTT, sampled whenever the kernel processes a received segment ---- */
+tracepoint:tcp:tcp_probe
+{
+  printf("{\"ev\":\"tcp_rtt\",\"t\":%llu,\"saddr\":\"%d.%d.%d.%d\",\"sport\":%d,\"daddr\":\"%d.%d.%d.%d\",\"dport\":%d,\"srtt_us\":%d,\"bytes\":%d}\n",
+         nsecs, args->saddr[4], args->saddr[5], args->saddr[6], args->saddr[7], args->sport,
+         args->daddr[4], args->daddr[5], args->daddr[6], args->daddr[7], args->dport,
+         args->srtt, args->data_len);
+}
+
+END {
+  clear(@dns_t); clear(@c_t); clear(@o_pid); clear(@o_tid);
+}

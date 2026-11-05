@@ -11,6 +11,7 @@ from agent.llm_client import LLMClient
 from agent.tools import Tools, seed_db
 from agent.tracing import Tracing
 from collectors import store
+from collectors.ebpf import KernelCollector
 from faultlab.faults import make_plan
 from faultlab.netem import Netem
 from mockservices.launcher import services
@@ -43,8 +44,11 @@ class DbLock:
         self._release()
 
 
-def run_one(fault, seed, con, split="eval"):
-    """Run a trial and save it to the store. Returns the run_id."""
+def run_one(fault, seed, con, split="eval", kernel=False):
+    """Run a trial and save it to the store. Returns the run_id.
+
+    kernel=True also records kernel events with the eBPF collector (needs passwordless sudo bpftrace).
+    """
     plan = make_plan(fault, seed)
     run_id = f"{split}-{fault}-{seed}"
     status, error = "ok", None
@@ -54,6 +58,10 @@ def run_one(fault, seed, con, split="eval"):
         svc = stack.enter_context(services(plan.llm_args, (), plan.dns_args))
         if plan.netem:
             stack.enter_context(Netem(svc.api_port, **plan.netem))
+        collector = None
+        if kernel:
+            # must start before DbLock: collector startup takes ~1s and would eat the lock window
+            collector = stack.enter_context(KernelCollector(dns_ports=[svc.dns_server[1]]))
         if plan.db_lock_ms:
             stack.enter_context(DbLock(db, plan.db_lock_ms))
         tracing = Tracing()
@@ -73,4 +81,8 @@ def run_one(fault, seed, con, split="eval"):
         spans,
         {"fault_type": fault, "target": plan.target, "params": plan.params,
          "start_ns": t_start, "end_ns": t_end})
+    if collector is not None:
+        env = {"agent_pid": os.getpid(), "api_port": svc.api_port, "llm_port": svc.llm_port,
+               "dns_port": svc.dns_server[1], "service_pids": svc.pids, "warnings": collector.warnings}
+        store.save_kernel(con, run_id, collector.events, collector.clock_sync, env)
     return run_id

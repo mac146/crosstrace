@@ -78,3 +78,19 @@ Running log. Newest at the bottom. Each entry: decision, why.
   for run-level labels; per-event windows are not tracked.
 - Not covered (state in write-up): loss/latency are static, not bursty; one fault at a time; mock services, not real
   providers; loopback only, so no real routing or congestion.
+
+## D12. Kernel collector: bpftrace, one process per run, JSON lines (2026-11-05)
+- User's choice (bpftrace over BCC). `collectors/net_events.bt` + `collectors/ebpf.py`. Started after the services
+  (so the DNS port is known) and before the DB lock (startup takes ~1 s). Stopped with SIGINT via sudo.
+- Probes: syscalls sendto/recvfrom (DNS), kprobe tcp_v4_connect + sock:inet_sock_set_state (connect), tcp:tcp_retransmit_skb,
+  tcp:tcp_probe (srtt). All present on the WSL2 kernel.
+- Per-run collection gives clean slicing and isolation; the cost is ~1 s per run, acceptable for a few hundred runs.
+
+## D13. Process attribution is exact only for DNS and connect events
+- tcp_probe has no socket pointer, so RTT samples have no PID; retransmits get a PID only if the socket was seen at
+  connect (client side). The correlator joins those by 4-tuple/port against the span's server.address/port (D6 plan:
+  PID/TID + time + destination).
+
+## D14. Clock alignment groundwork
+- Each run stores monotonic<->wall pairs taken before and after (best of 7 reads, error = half the bracketing gap).
+- Passwordless sudo for `tc` and `bpftrace` (scripts/setup_sudoers.sh) is root-equivalent: dev WSL only.

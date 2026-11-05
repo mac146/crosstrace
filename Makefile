@@ -9,7 +9,7 @@ run-healthy:
 test:
 	$(PYTHON) -m pytest -q
 
-# Stage 1 exit command. Needs passwordless `tc` (scripts/setup_tc_sudo.sh) for the netem faults.
+# Stage 1 exit command. Needs passwordless `tc` (scripts/setup_sudoers.sh) for the netem faults.
 eval-baseline:
 	$(PYTHON) -m eval.run_baseline --n $(N)
 

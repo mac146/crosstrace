@@ -76,7 +76,7 @@ def main():
 
     if NEEDS_ROOT & set(a.faults) and not netem_available():
         sys.exit("net_latency/packet_loss need passwordless root for `tc` "
-                 "(run scripts/setup_tc_sudo.sh once, or pass --faults without them).")
+                 "(run scripts/setup_sudoers.sh once, or pass --faults without them).")
     con = store.connect(a.db)
     collect(con, a.faults, a.n, a.cal, a.force)
     profile, rows = evaluate(con, a.faults)

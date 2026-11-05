@@ -82,3 +82,59 @@ def load_truth(con, run_id):
     r = con.execute("SELECT * FROM ground_truth WHERE run_id = ?", (run_id,)).fetchone()
     return {"fault_type": r["fault_type"], "target": r["target"], "params": json.loads(r["params"]),
             "start_ns": r["start_ns"], "end_ns": r["end_ns"]}
+
+
+# ---- Stage 2: kernel events, clock sync and run environment ----------------------------------
+
+KERNEL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS kernel_events (
+    run_id TEXT NOT NULL, t_mono_ns INTEGER NOT NULL, ev TEXT NOT NULL, pid INTEGER, tid INTEGER,
+    saddr TEXT, sport INTEGER, daddr TEXT, dport INTEGER, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS kernel_events_run ON kernel_events (run_id, t_mono_ns);
+CREATE TABLE IF NOT EXISTS clock_sync (
+    run_id TEXT NOT NULL, mono_ns INTEGER NOT NULL, wall_ns INTEGER NOT NULL, err_ns INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS run_env (run_id TEXT PRIMARY KEY, info TEXT NOT NULL);
+"""
+
+
+def init_kernel_schema(con):
+    con.executescript(KERNEL_SCHEMA)
+
+
+def save_kernel(con, run_id, events, clock_sync, env):
+    """events: collector dicts; clock_sync: [(mono_ns, wall_ns, err_ns)]; env: dict (ports, pids)."""
+    init_kernel_schema(con)
+    with con:
+        for table in ("kernel_events", "clock_sync", "run_env"):
+            con.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))
+        con.executemany(
+            "INSERT INTO kernel_events VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [(run_id, e["t"], e["ev"], e.get("pid"), e.get("tid"), e.get("saddr"), e.get("sport"),
+              e.get("daddr"), e.get("dport"),
+              json.dumps({k: v for k, v in e.items() if k not in
+                          ("t", "ev", "pid", "tid", "saddr", "sport", "daddr", "dport")}, sort_keys=True))
+             for e in events])
+        con.executemany("INSERT INTO clock_sync VALUES (?,?,?,?)", [(run_id, *c) for c in clock_sync])
+        con.execute("INSERT INTO run_env VALUES (?,?)", (run_id, json.dumps(env, sort_keys=True)))
+
+
+def load_kernel_events(con, run_id):
+    init_kernel_schema(con)
+    out = []
+    for r in con.execute("SELECT * FROM kernel_events WHERE run_id = ? ORDER BY t_mono_ns", (run_id,)):
+        e = {"t": r["t_mono_ns"], "ev": r["ev"], "pid": r["pid"], "tid": r["tid"], "saddr": r["saddr"],
+             "sport": r["sport"], "daddr": r["daddr"], "dport": r["dport"], **json.loads(r["data"])}
+        out.append({k: v for k, v in e.items() if v is not None})
+    return out
+
+
+def load_clock_sync(con, run_id):
+    init_kernel_schema(con)
+    return [tuple(r) for r in con.execute(
+        "SELECT mono_ns, wall_ns, err_ns FROM clock_sync WHERE run_id = ? ORDER BY mono_ns", (run_id,))]
+
+
+def load_env(con, run_id):
+    init_kernel_schema(con)
+    r = con.execute("SELECT info FROM run_env WHERE run_id = ?", (run_id,)).fetchone()
+    return json.loads(r["info"]) if r else None
