@@ -94,3 +94,19 @@ Running log. Newest at the bottom. Each entry: decision, why.
 ## D14. Clock alignment groundwork
 - Each run stores monotonic<->wall pairs taken before and after (best of 7 reads, error = half the bracketing gap).
 - Passwordless sudo for `tc` and `bpftrace` (scripts/setup_sudoers.sh) is root-equivalent: dev WSL only.
+
+## D15. Join design: strongest evidence first, strict containment before slack (Stage 3)
+- Exact PID/TID events (DNS, connect) attach by thread + time; a matched connect fixes the client port, which pins
+  that connection's PID-less RTT/retransmit events by 4-tuple (both directions, 5 s tail); spans whose connect never
+  completed fall back to port + time. Unmatched events are returned with a reason, never dropped.
+- Slack only decides when no span strictly contains the event (otherwise a neighbouring span steals it).
+
+## D16. Clock alignment: dense sync pairs, neighbour interpolation, jump reporting
+- Pair sampled every 100 ms (best of 3 reads, error = half the bracketing gap, ~0.1 us). WSL's host time sync stepped
+  CLOCK_REALTIME by ~3 ms in 7 of 160 runs, so a two-point linear fit is not safe.
+- Residual risk: an event within one sync interval of a step can be off by the step size. Reported as a WARNING, not hidden.
+
+## D17. Join validation uses an independent ground truth
+- Spans carry `crosstrace.debug.local_port` (the real client port). The correlator must not read it; only
+  correlator/integrity.py and the tests do. Without it, the checks would only confirm the matcher's own assumptions.
+- Runs that crashed must fail the check (D17 lesson: a vacuous pass hid a total failure for one iteration).

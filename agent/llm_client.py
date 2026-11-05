@@ -28,6 +28,9 @@ class LLMClient:
                 try:
                     conn.request("POST", "/v1/chat/completions", body,
                                  {"Content-Type": "application/json"})
+                    # validation-only ground truth for the Stage 3 join test; the correlator never reads it.
+                    # Must be read here: getresponse() detaches the socket when the server will close it.
+                    span.set_attribute("crosstrace.debug.local_port", conn.sock.getsockname()[1])
                     resp = conn.getresponse()
                     data = resp.read()
                     span.set_attribute("http.response.status_code", resp.status)

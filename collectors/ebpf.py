@@ -5,7 +5,7 @@
     with KernelCollector(dns_ports=[5353]) as k:
         ...run the agent...
     k.events      # list of dicts, sorted by t (CLOCK_MONOTONIC ns)
-    k.clock_sync  # [(mono_ns, wall_ns, err_ns), ...] taken before and after, for the Stage 3 join
+    k.clock_sync  # [(mono_ns, wall_ns, err_ns), ...] about every 100 ms, for the Stage 3 join
 """
 import json
 import os
@@ -48,9 +48,12 @@ def available():
 
 
 class KernelCollector:
-    def __init__(self, dns_ports=(53,), start_timeout=30):
+    def __init__(self, dns_ports=(53,), start_timeout=30, sync_interval_s=0.1):
         self.dns_ports = list(dns_ports)
         self.start_timeout = start_timeout
+        # The wall clock can step relative to CLOCK_MONOTONIC mid-run (WSL host time sync stepped it by
+        # 3.5 ms once in 80 runs), so sample the pair often: a step is then confined to one interval.
+        self.sync_interval_s = sync_interval_s
         self.events, self.clock_sync, self.stderr = [], [], ""
 
     def __enter__(self):
@@ -67,7 +70,14 @@ class KernelCollector:
             self._stop()
             raise RuntimeError("bpftrace did not become ready: " + "".join(self._err)[-500:])
         self.clock_sync.append(sync_clocks())
+        self._stop_sync = threading.Event()
+        self._sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
+        self._sync_thread.start()
         return self
+
+    def _sync_loop(self):
+        while not self._stop_sync.wait(self.sync_interval_s):
+            self.clock_sync.append(sync_clocks(samples=3))
 
     def _read_stdout(self):
         for line in self._proc.stdout:
@@ -95,6 +105,9 @@ class KernelCollector:
         self.stderr = "".join(self._err)
 
     def __exit__(self, *exc):
+        if hasattr(self, "_stop_sync"):
+            self._stop_sync.set()
+            self._sync_thread.join(timeout=2)
         self.clock_sync.append(sync_clocks())
         self._stop()
         self.events.sort(key=lambda e: e["t"])

@@ -47,6 +47,9 @@ class Tools:
             conn = http.client.HTTPConnection(ip, u.port, timeout=30)
             try:
                 conn.request("GET", path, headers={"Host": u.hostname})
+                # validation-only ground truth for the Stage 3 join test; the correlator never reads it.
+                # Must be read here: getresponse() detaches the socket when the server will close it.
+                span.set_attribute("crosstrace.debug.local_port", conn.sock.getsockname()[1])
                 resp = conn.getresponse()
                 span.set_attribute("http.response.status_code", resp.status)
                 return resp.read().decode()
