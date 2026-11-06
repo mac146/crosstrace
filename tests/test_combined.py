@@ -160,3 +160,50 @@ def test_kernel_profile_thresholds_follow_the_healthy_data():
     assert kp["srtt_ms"] == pytest.approx(max(0.2, 3 * 0.1) + 50)
     with pytest.raises(ValueError):
         build_kernel_profile([{"dns_ms": None, "srtt_max_ms": None, "server_wait_ms": None}])
+
+
+# ---- v3: slow_api ------------------------------------------------------------------------------------------------
+
+def test_v3_blames_a_slow_server_when_the_network_is_healthy():
+    tl = api_timeline(620, http_events(1.0, wait=600))              # DNS, connect, RTT all healthy; server held 600 ms
+    out = combined.diagnose(tl, PROFILE, KP, loss_explains_rtt=True, slow_api=True)
+    assert [c.cause for c in out] == ["slow_api"]
+    assert "server held the response" in out[0].evidence
+
+
+def test_v2_cannot_name_a_slow_server_and_blames_the_network():
+    tl = api_timeline(620, http_events(1.0, wait=600))
+    out = combined.diagnose(tl, PROFILE, KP, loss_explains_rtt=True)       # slow_api off: the v2 behaviour
+    assert sorted(c.cause for c in out) == ["dns_delay", "net_latency", "packet_loss"]
+
+
+def test_v3_still_prefers_network_evidence_over_server_wait():
+    # added latency makes the response late too (server wait ~ one-way delay); the RTT says it is the network
+    tl = api_timeline(1000, http_events(1.0, connect=400, srtt_us=400_000, wait=200))
+    assert [c.cause for c in combined.diagnose(tl, PROFILE, KP, loss_explains_rtt=True, slow_api=True)] \
+        == ["net_latency"]
+    tl = api_timeline(620, http_events(1.0, dns=600))
+    assert [c.cause for c in combined.diagnose(tl, PROFILE, KP, loss_explains_rtt=True, slow_api=True)] \
+        == ["dns_delay"]
+
+
+def test_v3_finds_both_dns_delay_and_slow_server_on_one_step():
+    tl = api_timeline(1220, http_events(1.0, dns=600, wait=600))
+    out = [c.cause for c in combined.diagnose(tl, PROFILE, KP, loss_explains_rtt=True, slow_api=True)]
+    assert sorted(out) == ["dns_delay", "slow_api"]
+
+
+def test_v3_fallback_with_no_kernel_evidence_includes_slow_api_in_the_split():
+    out = combined.diagnose(api_timeline(600, []), PROFILE, KP, slow_api=True)
+    assert sorted(c.cause for c in out) == ["dns_delay", "net_latency", "packet_loss", "slow_api"]
+
+
+def test_slow_api_is_never_blamed_for_a_slow_model_call():
+    # a slow model call whose connection looks like a network problem must not get the server rule
+    out = combined.diagnose(chat_timeline(500, llm_events(wait=480)), PROFILE, KP, slow_api=True)
+    assert [c.cause for c in out] == ["slow_model"]
+
+
+def test_v3_leaves_healthy_runs_alone():
+    assert [c.cause for c in combined.diagnose(api_timeline(3, http_events(1.0)), PROFILE, KP,
+                                                loss_explains_rtt=True, slow_api=True)] == ["none"]
