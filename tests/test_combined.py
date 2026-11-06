@@ -75,6 +75,22 @@ def test_latency_and_loss_together_split_the_excess():
     assert sorted(causes(tl)) == ["net_latency", "packet_loss"]
 
 
+def test_v2_lets_retransmits_explain_a_high_rtt():
+    # a lost SYN: handshake took ~1 s, so the first RTT sample is ~1 s too, AND there are retransmits
+    tl = api_timeline(1200, http_events(1.0, connect=1000, srtt_us=1_000_000, retx=2))
+    v1 = combined.diagnose(tl, PROFILE, KP)
+    v2 = combined.diagnose(tl, PROFILE, KP, loss_explains_rtt=True)
+    assert sorted(c.cause for c in v1) == ["net_latency", "packet_loss"]      # v1: equal split (coin flip)
+    assert [c.cause for c in v2] == ["packet_loss"]
+    assert {combined.diagnose(tl, PROFILE, KP, tie_seed=s, loss_explains_rtt=True)[0].cause
+            for s in range(30)} == {"packet_loss"}
+
+
+def test_v2_still_blames_latency_when_there_are_no_retransmits():
+    tl = api_timeline(1000, http_events(1.0, connect=400, srtt_us=400_000, wait=200))
+    assert [c.cause for c in combined.diagnose(tl, PROFILE, KP, loss_explains_rtt=True)] == ["net_latency"]
+
+
 def test_no_kernel_events_falls_back_to_baseline_three_way_split():
     tl = api_timeline(600, [])
     assert sorted(causes(tl)) == ["dns_delay", "net_latency", "packet_loss"]

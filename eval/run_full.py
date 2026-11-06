@@ -29,11 +29,13 @@ from faultlab.runner import run_one
 CAL_SEED0 = 900_000
 EVAL_SEED0 = 1_000
 NETWORK = ("dns_delay", "net_latency", "packet_loss")
+WHO = ("baseline", "combined", "combined2")
+LABEL = {"baseline": "base", "combined": "v1", "combined2": "v2"}
 
 
-def collect(con, faults, n, n_cal, force):
+def collect(con, faults, n, n_cal, force, split="full", seed0=EVAL_SEED0):
     todo = [("fullcal", "none", CAL_SEED0 + i) for i in range(n_cal)]
-    todo += [("full", f, EVAL_SEED0 + i) for f in faults for i in range(n)]
+    todo += [(split, f, seed0 + i) for f in faults for i in range(n)]
     for k, (split, fault, seed) in enumerate(todo, 1):
         rid = f"{split}-{fault}-{seed}"
         if not force and store.run_exists(con, rid) and store.load_env(con, rid) is not None:
@@ -53,12 +55,12 @@ def build_profiles(con):
     return profile, build_kernel_profile(bds)
 
 
-def evaluate(con, faults):
+def evaluate(con, faults, split="full"):
     profile, kprofile = build_profiles(con)
     out = {}
     for fault in faults:
         rows = []
-        for r in store.list_runs(con, "full", fault):
+        for r in store.list_runs(con, split, fault):
             rid = r["run_id"]
             spans = store.load_spans(con, rid)
             truth = store.load_truth(con, rid)["fault_type"]
@@ -70,9 +72,11 @@ def evaluate(con, faults):
             slow = dur_ms(root_span(spans)) > profile["run"]
             b = [c.cause for c in baseline.diagnose(spans, profile, tie_seed=r["seed"])]
             c = [x.cause for x in combined.diagnose(tl, profile, kprofile, tie_seed=r["seed"])]
+            c2 = [x.cause for x in combined.diagnose(tl, profile, kprofile, tie_seed=r["seed"],
+                                                    loss_explains_rtt=True)]
             rows.append({"run_id": rid, "no_kernel": False, "status": r["status"], "slow": slow,
                          "baseline": score_run(b, truth), "combined": score_run(c, truth),
-                         "b_top": b[0], "c_top": c[0]})
+                         "combined2": score_run(c2, truth), "b_top": b[0], "c_top": c[0], "c2_top": c2[0]})
         out[fault] = rows
     return profile, kprofile, out
 
@@ -90,18 +94,20 @@ def summarize(rows, who):
 def print_report(profile, kprofile, results):
     print("\nhealthy step thresholds (ms): " + ", ".join(f"{k}={v:.0f}" for k, v in sorted(profile.items())))
     print("healthy kernel thresholds (ms): " + ", ".join(f"{k}={v:.0f}" for k, v in sorted(kprofile.items())))
-    print("\nPER FAULT, same runs for both diagnosers (95% Wilson interval in brackets)")
+    print("\nbase = baseline (spans only); v1 = combined, rules fixed before any evaluation;")
+    print("v2 = v1 + one rule change (retransmits explain a high RTT) made after seeing v1's results on seeds 1000-1029")
+    print("\nPER FAULT, same runs for all diagnosers (95% Wilson interval in brackets)")
     print(f"{'fault':<12}{'n':>4}  {'':5}{'top-1':<18}{'top-3':<18}{'false-attr':<18}")
     all_rows = []
     for fault, rows in results.items():
         ok = [r for r in rows if not r["no_kernel"]]
         all_rows += [(fault, r) for r in ok]
-        for who in ("baseline", "combined"):
+        for who in WHO:
             a = summarize(rows, who)
             if a is None:
                 continue
             print(f"{fault if who == 'baseline' else '':<12}{a['n'] if who == 'baseline' else '':>4}  "
-                  f"{who[:4]:<5}{pct(a['top1'], a['top1_ci']):<18}{pct(a['top3'], a['top3_ci']):<18}"
+                  f"{LABEL[who]:<5}{pct(a['top1'], a['top1_ci']):<18}{pct(a['top3'], a['top3_ci']):<18}"
                   f"{pct(a['false_attr'], a['false_attr_ci']):<18}")
         skipped = len(rows) - len(ok)
         errs = sum(r["status"] != "ok" for r in ok)
@@ -113,13 +119,15 @@ def print_report(profile, kprofile, results):
         if not sel:
             return
         print(f"\n{label}  (n={len(sel)})")
-        for who in ("baseline", "combined"):
+        for who in WHO:
             a = aggregate([r[who] for r in sel])
-            print(f"  {who:<9} top-1 {pct(a['top1'], a['top1_ci'])}   top-3 {pct(a['top3'], a['top3_ci'])}   "
+            print(f"  {LABEL[who]:<5} top-1 {pct(a['top1'], a['top1_ci'])}   top-3 {pct(a['top3'], a['top3_ci'])}   "
                   f"false-attr {pct(a['false_attr'], a['false_attr_ci'])}")
-        b_only = sum(r["baseline"]["top1"] and not r["combined"]["top1"] for r in sel)
-        c_only = sum(r["combined"]["top1"] and not r["baseline"]["top1"] for r in sel)
-        print(f"  paired top-1: combined right & baseline wrong = {c_only}, baseline right & combined wrong = {b_only}")
+        for who in WHO[1:]:
+            w_only = sum(r[who]["top1"] and not r["baseline"]["top1"] for r in sel)
+            b_only = sum(r["baseline"]["top1"] and not r[who]["top1"] for r in sel)
+            print(f"  paired top-1 {LABEL[who]} vs base: {LABEL[who]} right & base wrong = {w_only}, "
+                  f"base right & {LABEL[who]} wrong = {b_only}")
 
     agg("NETWORK FAULTS (dns_delay, net_latency, packet_loss)", lambda f, r: f in NETWORK)
     agg("NON-NETWORK FAULTS (slow_tool, slow_db, slow_model, rate_limit)",
@@ -134,6 +142,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=30)
     ap.add_argument("--cal", type=int, default=30)
+    ap.add_argument("--split", default="full", help="run split to record/evaluate (use a new one for fresh seeds)")
+    ap.add_argument("--seed0", type=int, default=EVAL_SEED0, help="first evaluation seed")
     ap.add_argument("--faults", nargs="+", default=FAULT_TYPES, choices=FAULT_TYPES)
     ap.add_argument("--db", default=None)
     ap.add_argument("--force", action="store_true")
@@ -142,8 +152,8 @@ def main():
     if not bpf_available() or (NEEDS_ROOT & set(a.faults) and not tc_available()):
         sys.exit("needs passwordless sudo bpftrace and tc: run scripts/setup_sudoers.sh once")
     con = store.connect(a.db)
-    collect(con, a.faults, a.n, a.cal, a.force)
-    profile, kprofile, results = evaluate(con, a.faults)
+    collect(con, a.faults, a.n, a.cal, a.force, a.split, a.seed0)
+    profile, kprofile, results = evaluate(con, a.faults, a.split)
     print_report(profile, kprofile, results)
     if a.json:
         with open(a.json, "w") as f:

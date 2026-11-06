@@ -17,7 +17,7 @@ a slow step is blamed. Rules, all transparent:
    the rest of the excess goes to
      net_latency  if the largest smoothed RTT on the connection exceeds its healthy threshold,
      packet_loss  if the connection had any TCP retransmit,
-     both: split equally; neither: nothing network-ish explains the rest, so fall back to the
+     both: split equally (v2: all to packet_loss, see attribute_http); neither: nothing network-ish explains the rest, so fall back to the
      baseline's equal 3-way split (low confidence).
    If the span has no kernel events at all, fall back to the baseline's equal 3-way split too.
 5. Latent loss: a retransmit on any HTTP span's connection adds packet_loss with a tiny score (ranked last)
@@ -34,9 +34,14 @@ NETWORK = ("dns_delay", "net_latency", "packet_loss")
 LATENT_LOSS_SCORE = 0.001
 
 
-def attribute_http(excess, b, kp):
+def attribute_http(excess, b, kp, loss_explains_rtt=False):
     """Blame a slow HTTP-backed step. b: correlator breakdown of its HTTP span (or None).
-    Returns ({cause: ms}, {cause: why})."""
+    Returns ({cause: ms}, {cause: why}).
+
+    loss_explains_rtt (v2, added AFTER seeing v1's results on seeds 1000-1029): a lost SYN is retransmitted
+    after ~1 s, and the kernel's first RTT sample then includes that wait, so "RTT high" and "retransmits"
+    appear together when the only fault is packet loss. v1 split the blame equally and broke the tie at
+    random; v2 lets retransmits explain the RTT."""
     if b is None or b["n_events"] == 0:
         third = excess / 3
         return ({c: third for c in NETWORK},
@@ -49,7 +54,10 @@ def attribute_http(excess, b, kp):
     rest = max(0.0, excess - dns)
     lat = (b["srtt_max_ms"] or 0.0) > kp["srtt_ms"]
     loss = b["retransmits"] >= 1
-    if lat and loss:
+    if lat and loss and loss_explains_rtt:
+        scores["packet_loss"] = rest
+        lat = False
+    elif lat and loss:
         scores["net_latency"], scores["packet_loss"] = rest / 2, rest / 2
     elif lat:
         scores["net_latency"] = rest
@@ -67,7 +75,7 @@ def attribute_http(excess, b, kp):
     return {c: v for c, v in scores.items() if v > 0}, why
 
 
-def diagnose(timeline, profile, kprofile, tie_seed=0):
+def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False):
     spans = [e.span for e in timeline.entries]
     http_entry = {e.span["span_id"]: e for e in timeline.entries if _is_http(e.span)}
     scores, evidence = {}, {}
@@ -94,7 +102,7 @@ def diagnose(timeline, profile, kprofile, tie_seed=0):
                 add("slow_model", excess, step + f"; kernel: server held the response {max(waits):.0f}ms")
             elif net:
                 b = max(bds, key=lambda x: x["span_ms"])
-                for c, v in attribute_http(excess, b, kprofile)[0].items():
+                for c, v in attribute_http(excess, b, kprofile, loss_explains_rtt)[0].items():
                     add(c, v, step + "; kernel: network signal on the model connection")
             else:
                 add("slow_model", excess, step + "; kernel: network and server wait look healthy")
@@ -104,7 +112,7 @@ def diagnose(timeline, profile, kprofile, tie_seed=0):
             add("slow_tool", excess, step + "; kernel: no network involved")
         elif key == "tool:http_api":
             b = max(bds, key=lambda x: x["span_ms"]) if bds else None
-            sc, why = attribute_http(excess, b, kprofile)
+            sc, why = attribute_http(excess, b, kprofile, loss_explains_rtt)
             for c, v in sc.items():
                 add(c, v, step + "; " + why[c])
         else:
