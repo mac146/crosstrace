@@ -44,28 +44,36 @@ class DbLock:
         self._release()
 
 
-def run_one(fault, seed, con, split="eval", kernel=False):
+def run_one(fault, seed, con, split="eval", kernel=False, magnitude="normal", llm_kind="mock"):
     """Run a trial and save it to the store. Returns the run_id.
 
     kernel=True also records kernel events with the eBPF collector (needs passwordless sudo bpftrace).
+    llm_kind="anthropic" uses the real model (agent/anthropic_llm.py, needs an API key) instead of the mock server;
+    the kernel collector then also watches TCP port 443.
     """
-    plan = make_plan(fault, seed)
+    plan = make_plan(fault, seed, magnitude)
     run_id = f"{split}-{fault}-{seed}"
     status, error = "ok", None
     with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
         db = os.path.join(tmp, "app.db")
         seed_db(db)
-        svc = stack.enter_context(services(plan.llm_args, (), plan.dns_args))
+        svc = stack.enter_context(services(plan.llm_args, plan.api_args, plan.dns_args))
         if plan.netem:
             stack.enter_context(Netem(svc.api_port, **plan.netem))
         collector = None
         if kernel:
             # must start before DbLock: collector startup takes ~1s and would eat the lock window
-            collector = stack.enter_context(KernelCollector(dns_ports=[svc.dns_server[1]]))
+            collector = stack.enter_context(KernelCollector(
+                dns_ports=[svc.dns_server[1]], reduce_rtt=True,
+                ports=[svc.api_port, 443 if llm_kind == "anthropic" else svc.llm_port]))
         if plan.db_lock_ms:
             stack.enter_context(DbLock(db, plan.db_lock_ms))
         tracing = Tracing()
-        llm = LLMClient(svc.llm_url, tracing)
+        if llm_kind == "anthropic":
+            from agent.anthropic_llm import AnthropicLLM   # optional dependency, imported only when asked for
+            llm = AnthropicLLM(tracing)
+        else:
+            llm = LLMClient(svc.llm_url, tracing)
         tools = Tools(db, svc.api_url, svc.dns_server, tracing, plan.slow_extra_ms)
         t_start = time.time_ns()
         try:

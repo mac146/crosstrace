@@ -14,6 +14,12 @@
  *                             (timers/softirq: the "current" task there is unrelated, so we do not report it).
  *   tcp_rtt                   no process info (tcp_probe has no socket pointer): match by 4-tuple only.
  * dport/sport are host byte order.
+ *
+ * Port filter: the Python wrapper can restrict connects, retransmits and RTT samples to the services' ports
+ * (@@CONNECT_COND@@ / @@FLOW_COND@@ below), so unrelated traffic on the machine is dropped in the kernel
+ * instead of being emitted and thrown away later. Without a port list the conditions are `1` (record everything).
+ * @@RTT_COND@@ optionally drops RTT samples on pure ACKs (no payload) unless the smoothed RTT is already high
+ * (> 20 ms): the diagnosers only need payload segments (request/response timing) and unusually high RTT.
  */
 
 BEGIN {
@@ -47,11 +53,13 @@ kprobe:tcp_v4_connect
   $sk = (uint64)arg0;
   $sa = (struct sockaddr_in *)arg1;
   $port = (($sa->sin_port >> 8) & 0xff) | (($sa->sin_port & 0xff) << 8);
-  @c_t[$sk] = nsecs;
-  @o_pid[$sk] = pid;
-  @o_tid[$sk] = tid;
-  printf("{\"ev\":\"tcp_connect_start\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"comm\":\"%s\",\"daddr\":\"%s\",\"dport\":%d}\n",
-         nsecs, pid, tid, comm, ntop($sa->sin_addr.s_addr), $port);
+  if (@@CONNECT_COND@@) {
+    @c_t[$sk] = nsecs;
+    @o_pid[$sk] = pid;
+    @o_tid[$sk] = tid;
+    printf("{\"ev\":\"tcp_connect_start\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"comm\":\"%s\",\"daddr\":\"%s\",\"dport\":%d}\n",
+           nsecs, pid, tid, comm, ntop($sa->sin_addr.s_addr), $port);
+  }
 }
 
 /* SYN_SENT (2) -> ESTABLISHED (1): the three-way handshake finished */
@@ -77,6 +85,7 @@ tracepoint:sock:inet_sock_set_state
 
 /* ---- TCP retransmits (either side) ---- */
 tracepoint:tcp:tcp_retransmit_skb
+/@@FLOW_COND@@/
 {
   $sk = (uint64)args->skaddr;
   printf("{\"ev\":\"tcp_retransmit\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"saddr\":\"%s\",\"sport\":%d,\"daddr\":\"%s\",\"dport\":%d,\"state\":%d}\n",
@@ -85,6 +94,7 @@ tracepoint:tcp:tcp_retransmit_skb
 
 /* ---- TCP smoothed RTT, sampled whenever the kernel processes a received segment ---- */
 tracepoint:tcp:tcp_probe
+/(@@FLOW_COND@@) && (@@RTT_COND@@)/
 {
   printf("{\"ev\":\"tcp_rtt\",\"t\":%llu,\"saddr\":\"%d.%d.%d.%d\",\"sport\":%d,\"daddr\":\"%d.%d.%d.%d\",\"dport\":%d,\"srtt_us\":%d,\"bytes\":%d}\n",
          nsecs, args->saddr[4], args->saddr[5], args->saddr[6], args->saddr[7], args->sport,

@@ -6,8 +6,10 @@ REQUIRES passwordless sudo bpftrace (scripts/setup_sudoers.sh). Do not run anyth
 the eBPF arm traces the whole machine and the measurement is sensitive to load.
 
 Design
-- Arms: `untraced` (NoopTracing), `otel` (OpenTelemetry spans in-process), `otel+ebpf` (spans plus the bpftrace
-  collector running for the whole block), and `untraced-ctrl`, an identical second untraced arm (A/A control).
+- Arms: `untraced` (NoopTracing); `otel-legacy` (OpenTelemetry with a NEW TracerProvider per run, the original
+  design); `otel` (one shared provider, the current default); `otel+ebpf-all` (shared OTel plus the bpftrace
+  collector recording all TCP on the machine); `otel+ebpf-filtered` (same, but the kernel program only records the
+  services' ports and drops RTT samples on pure ACKs); and `untraced-ctrl`, an identical second untraced arm (A/A control).
 - Each round runs every arm once, in an order shuffled with a fixed seed. The first iterations of each block are
   discarded as warm-up.
 - Unit of analysis = the ROUND. Iterations inside one block share scheduling luck, so treating them as independent
@@ -39,7 +41,7 @@ from collectors.ebpf import KernelCollector, available
 from mockservices.launcher import services
 
 TASK = "What is customer 42's order total and shipping status?"
-ARMS = ["untraced", "otel", "otel+ebpf", "untraced-ctrl"]
+ARMS = ["untraced", "otel-legacy", "otel", "otel+ebpf-all", "otel+ebpf-filtered", "untraced-ctrl"]
 WORKLOADS = ("agent", "api_calls")
 TICK = os.sysconf("SC_CLK_TCK")
 WARMUP = 5
@@ -115,8 +117,13 @@ def collect(rounds, agent_iters, api_iters):
             order = ARMS[:]
             random.Random(rnd).shuffle(order)
             for arm in order:
-                factory = NoopTracing if arm.startswith("untraced") else Tracing
-                collector = KernelCollector(dns_ports=[svc.dns_server[1]]) if arm == "otel+ebpf" else None
+                factory = {"untraced": NoopTracing, "untraced-ctrl": NoopTracing,
+                           "otel-legacy": lambda: Tracing(shared=False)}.get(arm, Tracing)
+                collector = None
+                if arm.startswith("otel+ebpf"):
+                    ports = [svc.api_port, svc.llm_port] if arm.endswith("filtered") else None
+                    collector = KernelCollector(dns_ports=[svc.dns_server[1]], ports=ports,
+                                                reduce_rtt=arm.endswith("filtered"))
                 if collector:
                     collector.__enter__()
                 try:
@@ -158,7 +165,7 @@ def report(blocks, rounds):
         unit = "run" if w == "agent" else "call"
         n = sum(len(b["lat"]) for b in blocks[(w, "untraced")])
         print(f"\nWORKLOAD {w}  (per {unit}; {rounds} rounds, {n} timed {unit}s per arm)")
-        print(f"{'arm':<15}{'lat mean':>10}{'median':>9}{'p95':>9}{'main CPU':>10}{'proc CPU':>10}"
+        print(f"{'arm':<20}{'lat mean':>10}{'median':>9}{'p95':>9}{'main CPU':>10}{'proc CPU':>10}"
               f"{'bpftrace':>10}{'events/s':>9}")
         for arm in ARMS:
             bl = blocks[(w, arm)]
@@ -167,13 +174,13 @@ def report(blocks, rounds):
             bts = [b["bt_ms"] for b in bl if b["bt_ms"] is not None]
             events = sum(b["events"] for b in bl)
             secs = sum(b["secs"] for b in bl)
-            print(f"{arm:<15}{statistics.fmean(lat):>9.3f}m{statistics.median(lat):>8.3f}m{pctile(lat, .95):>8.3f}m"
+            print(f"{arm:<20}{statistics.fmean(lat):>9.3f}m{statistics.median(lat):>8.3f}m{pctile(lat, .95):>8.3f}m"
                   f"{statistics.fmean(flat('main')):>9.3f}m{statistics.fmean(flat('proc')):>9.3f}m"
                   f"{(f'{statistics.fmean(bts):.3f}m' if bts else '-'):>10}{(f'{events / secs:.0f}' if events else '-'):>9}")
         print(f"\n  overhead vs the same round's untraced block: mean of {rounds} rounds [95% bootstrap interval]")
-        print(f"  {'arm':<15}{'latency':<28}{'main-thread CPU':<28}{'process CPU':<28}")
+        print(f"  {'arm':<20}{'latency':<28}{'main-thread CPU':<28}{'process CPU':<28}")
         for arm in ARMS[1:]:
-            print(f"  {arm:<15}{fmt_rel(round_overhead(blocks, w, arm, 'lat'), 1):<28}"
+            print(f"  {arm:<20}{fmt_rel(round_overhead(blocks, w, arm, 'lat'), 1):<28}"
                   f"{fmt_rel(round_overhead(blocks, w, arm, 'main'), 2):<28}"
                   f"{fmt_rel(round_overhead(blocks, w, arm, 'proc'), 3):<28}")
     print("\n'untraced-ctrl' is the A/A control (identical to 'untraced'): effects inside its interval are noise.")

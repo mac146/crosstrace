@@ -44,3 +44,37 @@ def aggregate(scores):
         out[k] = hits / n if n else float("nan")
         out[k + "_ci"] = wilson(hits, n)
     return out
+
+
+def score_multi(ranked, truths):
+    """Score a run with several injected faults.
+
+    ranked: cause names, best first. truths: the injected fault names (2 for a pair).
+    top1_in_truth   first-ranked cause is one of the injected faults
+    all_in_topk     every injected fault is among the first len(truths) ranked causes (both found, "k = 2")
+    each_in_topk    share of injected faults found in the first len(truths) ranked causes
+    false_attr      first-ranked cause's component is none of the injected faults' components (nor "none")
+    """
+    if not ranked:
+        raise ValueError("empty ranking")
+    k = len(truths)
+    top = ranked[:k]
+    comps = {COMPONENT[t] for t in truths}
+    pred_comp = COMPONENT[ranked[0]]
+    return {
+        "top1_in_truth": ranked[0] in truths,
+        "all_in_topk": all(t in top for t in truths),
+        "each_in_topk": sum(t in top for t in truths) / k,
+        "false_attr": pred_comp != "none" and pred_comp not in comps,
+    }
+
+
+def aggregate_multi(scores):
+    n = len(scores)
+    out = {"n": n}
+    for key in ("top1_in_truth", "all_in_topk", "false_attr"):
+        hits = sum(s[key] for s in scores)
+        out[key] = hits / n if n else float("nan")
+        out[key + "_ci"] = wilson(hits, n)
+    out["each_in_topk"] = sum(s["each_in_topk"] for s in scores) / n if n else float("nan")
+    return out

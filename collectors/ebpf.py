@@ -17,10 +17,20 @@ import time
 BT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_events.bt")
 
 
-def program(dns_ports):
-    cond = " || ".join(f"$port == {int(p)}" for p in dns_ports)
+def program(dns_ports, ports=None, reduce_rtt=False):
+    """bpftrace program text. ports: restrict TCP events to these service ports (None = record all TCP).
+    reduce_rtt: drop RTT samples on pure ACKs unless srtt is already above 20 ms (about half the events)."""
+    dns_cond = " || ".join(f"$port == {int(p)}" for p in dns_ports)
+    if ports:
+        connect_cond = " || ".join(f"$port == {int(p)}" for p in ports)
+        flow_cond = " || ".join(f"args->sport == {int(p)} || args->dport == {int(p)}" for p in ports)
+    else:
+        connect_cond = flow_cond = "1"
+    rtt_cond = "args->data_len > 0 || args->srtt > 20000" if reduce_rtt else "1"
     with open(BT_FILE) as f:
-        return f.read().replace("@@DNS_COND@@", cond)
+        return (f.read().replace("@@DNS_COND@@", dns_cond)
+                .replace("@@CONNECT_COND@@", connect_cond).replace("@@FLOW_COND@@", flow_cond)
+                .replace("@@RTT_COND@@", rtt_cond))
 
 
 def sync_clocks(samples=7):
@@ -48,8 +58,11 @@ def available():
 
 
 class KernelCollector:
-    def __init__(self, dns_ports=(53,), start_timeout=30, sync_interval_s=0.1):
+    def __init__(self, dns_ports=(53,), start_timeout=30, sync_interval_s=0.1, ports=None,
+                 reduce_rtt=False):
         self.dns_ports = list(dns_ports)
+        self.ports = list(ports) if ports else None   # TCP service ports to keep; None = all
+        self.reduce_rtt = reduce_rtt
         self.start_timeout = start_timeout
         # The wall clock can step relative to CLOCK_MONOTONIC mid-run (WSL host time sync stepped it by
         # 3.5 ms once in 80 runs), so sample the pair often: a step is then confined to one interval.
@@ -58,7 +71,7 @@ class KernelCollector:
 
     def __enter__(self):
         self._proc = subprocess.Popen(
-            ["sudo", "-n", "bpftrace", "-q", "-B", "none", "-e", program(self.dns_ports)],
+            ["sudo", "-n", "bpftrace", "-q", "-B", "none", "-e", program(self.dns_ports, self.ports, self.reduce_rtt)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         self._ready = threading.Event()
         self._err = []

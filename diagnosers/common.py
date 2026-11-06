@@ -7,10 +7,11 @@ only for the false-attribution metric (blaming a component that was healthy).
 from dataclasses import dataclass
 
 CAUSES = ["dns_delay", "net_latency", "packet_loss", "slow_tool", "slow_db",
-          "slow_model", "rate_limit"]
+          "slow_model", "rate_limit", "slow_api"]
 COMPONENT = {
     "none": "none",
-    "dns_delay": "api", "net_latency": "api", "packet_loss": "api",   # network path to the API
+    "dns_delay": "api_net", "net_latency": "api_net", "packet_loss": "api_net",   # network path to the API
+    "slow_api": "api_server",   # the API server itself: blaming the network for it is a false attribution
     "slow_tool": "tool",
     "slow_db": "db",
     "slow_model": "model", "rate_limit": "model",

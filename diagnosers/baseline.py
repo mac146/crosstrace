@@ -22,7 +22,7 @@ from diagnosers.common import Cause, attr, descendants, dur_ms, operations
 NETWORK_CAUSES = ("dns_delay", "net_latency", "packet_loss")
 
 
-def diagnose(spans, profile, tie_seed=0):
+def diagnose(spans, profile, tie_seed=0, api_causes=NETWORK_CAUSES):
     scores, evidence = {}, {}
 
     def add(cause, amount, why):
@@ -46,8 +46,8 @@ def diagnose(spans, profile, tie_seed=0):
         elif key == "tool:slow_tool":
             add("slow_tool", excess, why)
         elif key == "tool:http_api":
-            for c in NETWORK_CAUSES:
-                add(c, excess / len(NETWORK_CAUSES), why + " (cannot split DNS/connect/loss from spans)")
+            for c in api_causes:   # extended catalogue: ("dns_delay", "net_latency", "packet_loss", "slow_api")
+                add(c, excess / len(api_causes), why + " (cannot split DNS/connect/loss/server from spans)")
         else:
             raise ValueError(f"unknown step {key}")
 
