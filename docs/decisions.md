@@ -110,3 +110,23 @@ Running log. Newest at the bottom. Each entry: decision, why.
 - Spans carry `crosstrace.debug.local_port` (the real client port). The correlator must not read it; only
   correlator/integrity.py and the tests do. Without it, the checks would only confirm the matcher's own assumptions.
 - Runs that crashed must fail the check (D17 lesson: a vacuous pass hid a total failure for one iteration).
+
+## D18. Fair comparison design (Stage 4)
+- Both diagnosers score the same recorded runs (collector on), same step thresholds from the same healthy calibration
+  runs. Baseline ties are broken by a seeded random draw so it gets no unearned credit and no unearned penalty.
+- The combined diagnoser falls back to the baseline's behaviour whenever kernel evidence is missing or shows nothing.
+
+## D19. The v2 rule change was post-hoc and is reported as such
+- After seeing v1's packet_loss misses on seeds 1000-1029 I changed one rule (retransmits explain a high RTT). To avoid
+  tuning to the evaluation set, v2 is judged on seeds 2000-2029, recorded after the change and never examined before.
+  v1 results stay the headline for set 1; v2 numbers on set 1 are labelled optimistic.
+
+## D20. Overhead measured round-paired with an A/A control
+- The first draft treated iterations as independent (A/A showed +44% on api_calls). The unit of analysis is now the
+  round, each arm normalised by the same round's untraced block, bootstrap over rounds, plus an untraced-ctrl arm.
+- CPU is reported as main-thread vs process because the collector's helper threads live in the agent process.
+
+## D21. Overhead target not met; no mitigation attempted yet
+- OTel in-process: about +7.5% latency and +63% main-thread CPU per run. eBPF adds about 4.5 ms/run of bpftrace CPU plus
+  about 3.4 ms of helper-thread CPU. Options not tried: head sampling, a lighter span set, batching, moving JSON
+  parsing out of the agent process.
