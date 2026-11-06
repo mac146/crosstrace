@@ -6,7 +6,7 @@ set -u
 
 echo "== installing tools =="
 sudo apt-get update -qq
-sudo apt-get install -y -qq bpftrace iproute2 dnsmasq curl || echo "apt install had problems (continuing)"
+sudo apt-get install -y -qq bpftrace iproute2 curl || echo "apt install had problems (continuing)"
 
 echo "== bpftrace: trace one connect() syscall =="
 sudo timeout 10 bpftrace -e 'tracepoint:syscalls:sys_enter_connect { printf("connect pid=%d comm=%s\n", pid, comm); exit(); }' &

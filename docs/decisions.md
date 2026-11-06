@@ -8,8 +8,9 @@ Running log. Newest at the bottom. Each entry: decision, why.
   - `tc qdisc add dev lo root netem delay 10ms loss 1%`: **OK** (`sch_netem` loads)
 - So eBPF tracing and `tc netem` faults are feasible without a custom kernel or separate VM.
 - All root/network-modifying steps (eBPF, `tc`, DNS) run only inside WSL and are flagged in scripts.
-- systemd is not running in this WSL, so `dnsmasq` does not auto-start. faultlab will launch it
-  as a child process for `dns_delay`.
+- systemd is not running in this WSL, so `dnsmasq` does not auto-start. faultlab was going to launch it
+  as a child process for `dns_delay`. **Superseded by D9:** a small Python stub resolver is used instead,
+  so dnsmasq is not needed (and is no longer installed by the setup script).
 
 ## D2. Repo lives on the Windows filesystem (`C:\...\crosstrace`), accessed from WSL via `/mnt/c`
 - User's choice (workspace already there). Cost: slower I/O and unreliable SQLite file locking on `/mnt/c`.
