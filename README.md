@@ -148,4 +148,4 @@ and any mitigation of the tracing overhead.
 
 ## License
 
-Not chosen yet. Add a `LICENSE` file before publishing.
+MIT, see [LICENSE](LICENSE).
