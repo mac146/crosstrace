@@ -159,3 +159,10 @@ Running log. Newest at the bottom. Each entry: decision, why.
   limitations, not patched: v3 stays frozen, and a v4 would need fresh seeds and a real-network healthy baseline.
 - An OpenRouter key belonging to another project was used at the user's explicit request: read in place from that project's
   .env, never copied, cheap model chosen by me, hard token cap, spend reported ($0.0028). The unused OpenCode key's .env was deleted.
+
+## D28. v4: the latent-loss rule gets a healthy retransmit baseline (Stage 7)
+- Written after the real-model run; judged on 16 fresh healthy real runs and a 150-run mock regression (identical to v3).
+  False alarms on healthy real runs 69% -> 6%. The detection cost (a baseline of 5 hides mild injected loss on that network)
+  is untested and stated in the results. v4 is now the version to use on a real network; v3 stays for comparison.
+- A syntax error in an eval script reached a paid run once because no test imported it; tests/test_scripts_compile.py now
+  compiles every module and script.

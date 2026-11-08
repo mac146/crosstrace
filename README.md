@@ -38,7 +38,10 @@ cores busy, and a third-party agent framework (LangGraph, 96.7-100% on the same 
 advantage. A first run against a **real model over the real internet** (small sample) found two real problems: the
 combined diagnoser raised false alarms on healthy runs because real connections routinely show TCP retransmits (it
 reported them as packet loss), and its server-wait signal cannot be computed for a remote server. Thresholds also have
-to be calibrated on the real service. Where my predictions were wrong, the results document says so. **Not tested:**
+to be calibrated on the real service. A fourth version (v4) that only reports background-level retransmits as packet loss when
+they exceed what healthy runs show cut those false alarms from 69% to 6% on fresh healthy runs, at a cost that is not yet
+measured: it would stay silent about mild packet loss on that network ([docs/results-stage7.md](docs/results-stage7.md)).
+Where my predictions were wrong, the results document says so. **Not tested:**
 network faults on a real path, production load.
 
 **How much to trust this**

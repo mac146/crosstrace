@@ -117,6 +117,7 @@ def print_scores(title, results, variants):
 
 
 def main():
+    global EVAL_SPLIT, EVAL_SEED0, FAULTS
     ap = argparse.ArgumentParser()
     ap.add_argument("--cal", type=int, default=12, help="healthy real-model runs for calibration")
     ap.add_argument("--n", type=int, default=8, help="runs per fault")
@@ -134,7 +135,6 @@ def main():
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--no-record", action="store_true")
     a = ap.parse_args()
-    global EVAL_SPLIT, EVAL_SEED0, FAULTS
     EVAL_SPLIT = a.split or EVAL_SPLIT
     EVAL_SEED0 = a.seed0 if a.seed0 is not None else EVAL_SEED0
     FAULTS = a.faults or FAULTS
