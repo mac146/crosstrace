@@ -34,3 +34,20 @@ Predictions (top-1 for S0-S2, "both truths in the top 2" for S3-S4):
 Overall belief: the join adds a measurable edge over the strongest cheap baseline only in S3-type situations (different problems at the
 same destination in one run, or concurrency that mixes requests); everywhere else per-destination metrics with per-request wait suffice. 60%.
 I would be wrong, and say so, if `pool_port` matches `v3` in S3 (the join adds nothing even here) or if `v3` itself is below 70% in S3.
+
+## Part 2: the same comparison under concurrency (written BEFORE the code or the runs)
+Setup: C agents (threads of one process, each with its own trace) run the mixed scenario at the same moment against one API server,
+in lockstep: before call i every agent waits at a barrier, the latency window (netem on the server port) is opened for calls 1 and 3 and
+closed for 2 and 4, the server answers calls 2 and 4 slowly. So every agent has the truth {net_latency, slow_api}. A netem window is per
+port, so agents cannot be given different network faults at the same time; that is a limit of the injector, stated here. One collector
+records everything. Each agent is diagnosed on its own spans. Host-wide arms (`pool`, `pool_port`, `obi`'s evidence) are built from ALL
+agents' HTTP spans, as a shared host's counters would be. Healthy thresholds are calibrated at the same C (12 healthy runs), and 6 more
+healthy runs at that C measure false alarms. C = 1 (control), 8, 32; 20 mixed runs at C = 1 and 8, 10 at C = 32.
+6. **The join survives**: `v3` finds both causes (both in top 2) for at least 90% of agents at C = 8 (75%) and at least 80% at C = 32 (60%).
+   What can break it: the join misattributing events between simultaneous threads, or the collector losing events at 32 connections at once.
+7. `pool`, `pool_port` and `obi` stay at or below 30% at every C (85%): they fail for the same structural reason as at C = 1, so
+   concurrency cannot make them worse than 0%. Concurrency therefore does NOT widen the gap this experiment can show; it tests whether the join
+   keeps its side of it.
+8. Healthy runs at C = 8: at most 5% of agents get a false alarm from `v3`; at C = 32 at most 10% (55%): load makes healthy steps slower, and
+   calibrating at the same C only partly absorbs that.
+I would be wrong if `v3` falls below 80% at C = 8, or loses events (collector warnings) at C = 32.
