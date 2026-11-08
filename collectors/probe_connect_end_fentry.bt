@@ -1,0 +1,24 @@
+/*
+ * Connection completion via an fentry hook on tcp_finish_connect() (the default where the kernel and bpftrace support it).
+ * Spliced into the main program by collectors/ebpf.py; the port filter on $dport is substituted for the END_COND marker below.
+ * Replaces the sock:inet_sock_set_state tracepoint (probe_connect_end_tracepoint.bt), which lost about 0.1% of these events
+ * under heavy load (Stage 11/12): a controlled run recorded both and the fentry hook saw every connection the tracepoint missed.
+ * Same event shape as before (tcp_connect_end). pid/tid come from the map written at connect start (the hook runs in softirq
+ * context, so "current" is not the caller); if that entry is missing they are 0 and lat_ns is 0, and the correlator attaches the
+ * event by its connection instead.
+ */
+fentry:vmlinux:tcp_finish_connect
+{
+  /* the explicit cast makes bpftrace load the full definition of struct sock; without any cast in the program the
+   * field access below failed to compile ("struct sock does not contain __sk_common") */
+  $sk = (struct sock *)args->sk;
+  $k = (uint64)$sk;
+  $dport = ($sk->__sk_common.skc_dport >> 8) | (($sk->__sk_common.skc_dport & 0xff) << 8);
+  if (@@END_COND@@) {
+    $t0 = @c_t[$k];
+    printf("{\"ev\":\"tcp_connect_end\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"saddr\":\"%s\",\"sport\":%d,\"daddr\":\"%s\",\"dport\":%d,\"lat_ns\":%llu,\"sk\":%llu}\n",
+           nsecs, @o_pid[$k], @o_tid[$k], ntop($sk->__sk_common.skc_rcv_saddr), $sk->__sk_common.skc_num,
+           ntop($sk->__sk_common.skc_daddr), $dport, ($t0 != 0 ? nsecs - $t0 : 0), $k);
+    delete(@c_t[$k]);
+  }
+}

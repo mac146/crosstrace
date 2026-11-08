@@ -32,3 +32,22 @@ Not rewritable in C here. Measure where the collector's CPU goes, then try only 
 I would be wrong if: the loss does not reproduce (1); fentry misses at least half of the spans with no tracepoint end AND switching
 to it still leaves the gap (3); no candidate feature beats F1 on the design set (4); CPU can be cut by more than 50% by event
 reduction alone (6).
+
+## D. A compiled collector (C + libbpf, CO-RE), added after the toolchain was installed (written BEFORE it was built or run)
+Context for these numbers (measured in Stage 12, bpftrace collector, per 60 ms agent run): bpftrace process 2.7-3.0 ms of CPU, the
+reader threads inside the agent process 2.3-2.6 ms, so about 5.1-5.6 ms in total; with no traffic at all the same collector costs
+0.08 ms + 0.12 ms, so the cost is per-activity (text formatting and parsing), not a fixed floor. The new collector emits fixed-size
+binary records through a ring buffer, the Python side only appends raw bytes while the run is going, and decoding happens afterwards.
+Same events, same field names, same clock (CLOCK_MONOTONIC), so the correlator and diagnosers do not change.
+8. **CPU during the run falls from about 5.1-5.6 ms to at most 1.5 ms per 60 ms run** (at least 3.4x less), measured by the same
+   benchmark with the collector's decode work excluded from the run (it is done offline, and I will say so next to the number).
+   My honest range: 55% that it reaches 1.5 ms, 30% that it lands between 1.5 and 3 ms, 15% that it is no better than 3 ms.
+9. **Same evidence**: on the same workloads the correlator gives the same result: the 8-fault join integrity check (`make stage3-check`)
+   passes 100% with the C collector, and the sustained 512-thread churn at backlog 256 has no more missing connect-ends than the fentry
+   bpftrace collector (3 or fewer per 74,240), with 0 ring-buffer losses reported.
+10. **Start-up** is faster than bpftrace's compile-and-attach (about 1 s): under 0.5 s.
+11. It needs the same root permission model (one sudoers rule for one binary) and cannot be used without it; the bpftrace collector
+    stays as the fallback and as the reference the C collector is compared with.
+
+I would be wrong if CPU per run is not at least halved (8), if integrity drops below 100% or the churn gap exceeds the bpftrace
+fentry level (9), or if a verifier or attach failure forces dropping any of the probes (then the C collector is incomplete and I say so).

@@ -62,16 +62,7 @@ kprobe:tcp_v4_connect
   }
 }
 
-/* SYN_SENT (2) -> ESTABLISHED (1): the three-way handshake finished */
-tracepoint:sock:inet_sock_set_state
-/args->protocol == 6 && args->oldstate == 2 && args->newstate == 1 && @c_t[(uint64)args->skaddr] != 0/
-{
-  $sk = (uint64)args->skaddr;
-  printf("{\"ev\":\"tcp_connect_end\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"saddr\":\"%s\",\"sport\":%d,\"daddr\":\"%s\",\"dport\":%d,\"lat_ns\":%llu,\"sk\":%llu}\n",
-         nsecs, @o_pid[$sk], @o_tid[$sk], ntop(args->saddr), args->sport, ntop(args->daddr), args->dport,
-         nsecs - @c_t[$sk], $sk);
-  delete(@c_t[$sk]);
-}
+@@CONNECT_END@@
 
 /* socket closed: forget its owner */
 tracepoint:sock:inet_sock_set_state

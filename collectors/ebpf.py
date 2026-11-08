@@ -25,11 +25,30 @@ def _read(name):
         return f.read()
 
 
-def program(dns_ports, ports=None, reduce_rtt=False, libc_dns=False, tcp_send=False, connect_fentry=False):
+_FENTRY_OK = None
+
+
+def fentry_supported():
+    """True if bpftrace can attach fentry probes here (kernel with BTF + a bpftrace that lists them). Cached."""
+    global _FENTRY_OK
+    if _FENTRY_OK is None:
+        try:
+            out = subprocess.run(["sudo", "-n", "bpftrace", "-l", "fentry:vmlinux:tcp_finish_connect"],
+                                 capture_output=True, text=True, timeout=30).stdout
+            _FENTRY_OK = "tcp_finish_connect" in out
+        except (OSError, subprocess.SubprocessError):
+            _FENTRY_OK = False
+    return _FENTRY_OK
+
+
+def program(dns_ports, ports=None, reduce_rtt=False, libc_dns=False, tcp_send=False, connect_fentry=False,
+            connect_end="tracepoint"):
     """bpftrace program text.
 
     ports: restrict TCP events to these service ports (None = record all TCP).
     reduce_rtt: drop RTT samples on pure ACKs unless srtt is already above 20 ms (about half the events).
+    connect_end: "fentry" (hook on tcp_finish_connect, reliable under load) or "tracepoint" (fallback; skipped about 0.1% of
+    the time at 512 concurrent threads).
     libc_dns: also time libc getaddrinfo() (DNS as the application sees it).
     tcp_send: also record every tcp_sendmsg() on the watched ports, with pid/tid.
     """
@@ -41,12 +60,16 @@ def program(dns_ports, ports=None, reduce_rtt=False, libc_dns=False, tcp_send=Fa
         fentry_cond = " || ".join(f"$dport == {int(p)}" for p in ports)
     else:
         connect_cond = flow_cond = send_cond = fentry_cond = "1"
+    if connect_end not in ("fentry", "tracepoint"):
+        raise ValueError(f"connect_end must be 'fentry' or 'tracepoint', not {connect_end!r}")
+    end = (_read("probe_connect_end_fentry.bt").replace("@@END_COND@@", fentry_cond) if connect_end == "fentry"
+           else _read("probe_connect_end_tracepoint.bt"))
     rtt_cond = "args->data_len > 0 || args->srtt > 20000" if reduce_rtt else "1"
     gai = _read("probe_getaddrinfo.bt").replace("@@LIBC@@", LIBC) if libc_dns else ""
     send = _read("probe_tcp_send.bt").replace("@@SEND_COND@@", send_cond) if tcp_send else ""
     fentry = _read("probe_connect_fentry.bt").replace("@@FENTRY_COND@@", fentry_cond) if connect_fentry else ""
     return (_read("net_events.bt").replace("@@GAI_PROBES@@", gai).replace("@@SEND_PROBE@@", send)
-            .replace("@@FENTRY_PROBE@@", fentry)
+            .replace("@@FENTRY_PROBE@@", fentry).replace("@@CONNECT_END@@", end)
             .replace("@@DNS_COND@@", dns_cond).replace("@@CONNECT_COND@@", connect_cond)
             .replace("@@FLOW_COND@@", flow_cond).replace("@@RTT_COND@@", rtt_cond))
 
@@ -86,8 +109,10 @@ def available():
 
 class KernelCollector:
     def __init__(self, dns_ports=(53,), start_timeout=30, sync_interval_s=0.1, ports=None,
-                 reduce_rtt=False, libc_dns=False, tcp_send=False, connect_fentry=False):
+                 reduce_rtt=False, libc_dns=False, tcp_send=False, connect_fentry=False, connect_end=None):
         self.libc_dns, self.tcp_send, self.connect_fentry = libc_dns, tcp_send, connect_fentry
+        # default: fentry where supported (reliable under load), else the tracepoint
+        self.connect_end = connect_end or ("fentry" if fentry_supported() else "tracepoint")
         self.dns_ports = list(dns_ports)
         self.ports = list(ports) if ports else None   # TCP service ports to keep; None = all
         self.reduce_rtt = reduce_rtt
@@ -101,7 +126,7 @@ class KernelCollector:
     def __enter__(self):
         self._proc = subprocess.Popen(
             ["sudo", "-n", "bpftrace", "-B", "none", "-e", program(self.dns_ports, self.ports, self.reduce_rtt, self.libc_dns, self.tcp_send,
-                                    self.connect_fentry)],
+                                    self.connect_fentry, self.connect_end)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         self._ready = threading.Event()
         self._err = []

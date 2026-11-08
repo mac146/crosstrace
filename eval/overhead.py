@@ -42,6 +42,11 @@ from mockservices.launcher import services
 
 TASK = "What is customer 42's order total and shipping status?"
 ARMS = ["untraced", "otel-legacy", "otel", "otel+ebpf-all", "otel+ebpf-filtered", "untraced-ctrl"]
+# Stage 12: what does each part of the collector cost? (ports filtered and pure-ACK RTT dropped in all of them)
+STAGE12_ARMS = ["untraced", "otel", "ebpf-tracepoint", "ebpf-fentry", "ebpf-fentry+send", "untraced-ctrl"]
+COLLECTOR_ARMS = {"ebpf-tracepoint": {"connect_end": "tracepoint"},          # the collector as it was before Stage 12
+                  "ebpf-fentry": {"connect_end": "fentry"},                  # the new default (reliable under load)
+                  "ebpf-fentry+send": {"connect_end": "fentry", "tcp_send": True}}   # plus the TCP-send probe
 WORKLOADS = ("agent", "api_calls")
 TICK = os.sysconf("SC_CLK_TCK")
 WARMUP = 5
@@ -120,6 +125,9 @@ def collect(rounds, agent_iters, api_iters):
                 factory = {"untraced": NoopTracing, "untraced-ctrl": NoopTracing,
                            "otel-legacy": lambda: Tracing(shared=False)}.get(arm, Tracing)
                 collector = None
+                if arm in COLLECTOR_ARMS:
+                    collector = KernelCollector(dns_ports=[svc.dns_server[1]], ports=[svc.api_port, svc.llm_port],
+                                                reduce_rtt=True, **COLLECTOR_ARMS[arm])
                 if arm.startswith("otel+ebpf"):
                     ports = [svc.api_port, svc.llm_port] if arm.endswith("filtered") else None
                     collector = KernelCollector(dns_ports=[svc.dns_server[1]], ports=ports,
@@ -190,9 +198,14 @@ def report(blocks, rounds):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rounds", type=int, default=12)
+    ap.add_argument("--arms", choices=["stage6", "stage12"], default="stage6",
+                    help="stage12: compare the collector's parts (tracepoint vs fentry connect-end, with/without TCP-send probe)")
     ap.add_argument("--agent-iters", type=int, default=40)
     ap.add_argument("--api-iters", type=int, default=30)
     a = ap.parse_args()
+    global ARMS
+    if a.arms == "stage12":
+        ARMS = STAGE12_ARMS
     if not available():
         sys.exit("needs passwordless sudo bpftrace: run scripts/setup_sudoers.sh once")
     report(collect(a.rounds, a.agent_iters, a.api_iters), a.rounds)

@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 PID_TCP = ("tcp_connect_start", "tcp_connect_end")
 PID_DNS = ("dns_query", "dns_response")
-FLOW_EVENTS = ("tcp_rtt", "tcp_retransmit", "tcp_send")
+FLOW_EVENTS = ("tcp_rtt", "tcp_retransmit", "tcp_send", "tcp_connect_end")   # connect_end only when it has no pid
 
 
 class ClockMap:
@@ -223,6 +223,8 @@ def correlate(spans, kernel_events, clock_pairs, slack_ns=1_000_000, tail_ns=5_0
     for i, ev in enumerate(events):
         if i in claimed or ev["ev"] not in FLOW_EVENTS:
             continue
+        if ev["ev"] == "tcp_connect_end" and ev.get("pid"):
+            continue   # a connect_end that names a process was offered to that process's spans in step 1; never guess it
         key = pair(ev)
         owners = flows.get(key) if key else None
         if owners:
@@ -242,6 +244,8 @@ def correlate(spans, kernel_events, clock_pairs, slack_ns=1_000_000, tail_ns=5_0
     for i, ev in enumerate(events):
         if i in claimed or ev["ev"] not in FLOW_EVENTS:
             continue
+        if ev["ev"] == "tcp_connect_end":
+            continue   # attached by its connection (step 2) or not at all: port + time would be a guess on another thread
         key = pair(ev)
         if key in flows:
             continue   # belongs to a known flow of some span, just outside its window: not ours to guess
