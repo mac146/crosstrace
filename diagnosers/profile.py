@@ -45,16 +45,21 @@ def build_profile(runs_spans, rule="coarse"):
     return {k: _threshold(v, rule) for k, v in samples.items()}
 
 
-def build_kernel_profile(breakdowns, rule="coarse"):
+def build_kernel_profile(breakdowns, rule="coarse", run_retx=None):
     """Healthy thresholds for kernel-derived signals, same rule as the step thresholds.
 
     breakdowns: correlator.join.breakdown() dicts of HTTP spans from healthy runs.
     Keys: dns_ms (hostname lookups only), srtt_ms (largest smoothed RTT), server_wait_ms.
+    run_retx: total TCP retransmits of each healthy run (v4's latent-loss baseline). Adds "retx_per_run" = the largest
+    count that healthy runs show (nearest-rank p99); a healthy loopback gives 0, a healthy real network does not.
     """
     dns = [b["dns_ms"] for b in breakdowns if b["dns_ms"] is not None]
     srtt = [b["srtt_max_ms"] for b in breakdowns if b["srtt_max_ms"] is not None]
     wait = [b["server_wait_ms"] for b in breakdowns if b["server_wait_ms"] is not None]
     if not (dns and srtt and wait):
         raise ValueError("calibration runs carry no kernel evidence")
-    return {"dns_ms": _threshold(dns, rule), "srtt_ms": _threshold(srtt, rule),
-            "server_wait_ms": _threshold(wait, rule)}
+    out = {"dns_ms": _threshold(dns, rule), "srtt_ms": _threshold(srtt, rule),
+           "server_wait_ms": _threshold(wait, rule)}
+    if run_retx:
+        out["retx_per_run"] = _p99(run_retx)
+    return out

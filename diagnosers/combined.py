@@ -87,7 +87,11 @@ def attribute_http(excess, b, kp, loss_explains_rtt=False, slow_api=False):
     return {c: v for c, v in scores.items() if v > 0}, why
 
 
-def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, slow_api=False):
+def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, slow_api=False,
+             latent_baseline=False):
+    """latent_baseline (v4, added AFTER the real-model run showed 5 of 8 healthy runs with 1-4 retransmits): the latent
+    loss rule fires only when the run's retransmits exceed kprofile["retx_per_run"], the most that healthy runs on the
+    same network show. On a healthy loopback that is 0, so behaviour there is unchanged."""
     spans = [e.span for e in timeline.entries]
     http_entry = {e.span["span_id"]: e for e in timeline.entries if _is_http(e.span)}
     scores, evidence = {}, {}
@@ -132,7 +136,7 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
 
     if "packet_loss" not in scores:
         n = sum(breakdown(e)["retransmits"] for e in http_entry.values())
-        if n:
+        if n > (kprofile.get("retx_per_run", 0) if latent_baseline else 0):
             add("packet_loss", LATENT_LOSS_SCORE, f"{n} TCP retransmit(s) seen although no step was slow")
 
     if not scores:

@@ -204,6 +204,37 @@ def test_slow_api_is_never_blamed_for_a_slow_model_call():
     assert [c.cause for c in out] == ["slow_model"]
 
 
+# ---- v4: latent loss needs a healthy retransmit baseline -----------------------------------------------------------
+
+def test_v4_latent_loss_only_fires_above_the_healthy_baseline():
+    tl = api_timeline(3, http_events(1.0, retx=3))                       # 3 retransmits, nothing slow
+    kp = dict(KP, retx_per_run=4)                                        # healthy runs on this network show up to 4
+    assert [c.cause for c in combined.diagnose(tl, PROFILE, kp, latent_baseline=True)] == ["none"]
+    assert [c.cause for c in combined.diagnose(tl, PROFILE, dict(KP, retx_per_run=2), latent_baseline=True)] \
+        == ["packet_loss"]
+    assert [c.cause for c in combined.diagnose(tl, PROFILE, kp)] == ["packet_loss"]    # v3: any retransmit fires
+
+
+def test_v4_on_a_healthy_loopback_behaves_like_v3():
+    tl = api_timeline(3, http_events(1.0, retx=1))
+    for kp in (dict(KP), dict(KP, retx_per_run=0)):                      # no baseline key, or a baseline of 0
+        assert [c.cause for c in combined.diagnose(tl, PROFILE, kp, latent_baseline=True)] == ["packet_loss"]
+
+
+def test_v4_does_not_touch_the_slow_step_loss_attribution():
+    tl = api_timeline(1200, http_events(1.0, connect=1000, srtt_us=900, retx=2))
+    kp = dict(KP, retx_per_run=4)
+    assert combined.diagnose(tl, PROFILE, kp, latent_baseline=True)[0].cause == "packet_loss"
+
+
+def test_kernel_profile_baseline_is_the_largest_healthy_retransmit_count():
+    from diagnosers.profile import build_kernel_profile
+    bd = [{"dns_ms": 0.4, "srtt_max_ms": 0.1, "server_wait_ms": 1.0}] * 3
+    assert "retx_per_run" not in build_kernel_profile(bd)
+    assert build_kernel_profile(bd, run_retx=[0, 0, 0, 0])["retx_per_run"] == 0
+    assert build_kernel_profile(bd, run_retx=[0, 1, 4, 2, 0, 3, 1, 0])["retx_per_run"] == 4
+
+
 def test_v3_leaves_healthy_runs_alone():
     assert [c.cause for c in combined.diagnose(api_timeline(3, http_events(1.0)), PROFILE, KP,
                                                 loss_explains_rtt=True, slow_api=True)] == ["none"]

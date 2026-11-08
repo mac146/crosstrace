@@ -49,11 +49,13 @@ def calibrate(con, split, rule="coarse"):
     if not runs:
         return None
     profile = build_profile([store.load_spans(con, r["run_id"]) for r in runs], rule)
-    bds = []
+    bds, run_retx = [], []
     for r in runs:
         tl, _ = load_timeline(con, r["run_id"])
-        bds += [breakdown(e) for e in tl.entries if _is_http(e.span)]
-    return profile, build_kernel_profile(bds, rule)
+        these = [breakdown(e) for e in tl.entries if _is_http(e.span)]
+        bds += these
+        run_retx.append(sum(b["retransmits"] for b in these))
+    return profile, build_kernel_profile(bds, rule, run_retx)
 
 
 def kernel_visibility(con):
@@ -123,11 +125,19 @@ def main():
                          "OpenAI-compatible endpoint in the env file (OpenRouter / OpenCode)")
     ap.add_argument("--price-in", type=float, default=0.10, help="$ per million input tokens, for the cost line")
     ap.add_argument("--price-out", type=float, default=0.50, help="$ per million output tokens, for the cost line")
-    ap.add_argument("--variants", nargs="+", default=["base", "v2"], choices=["base", "v2", "v3"])
+    ap.add_argument("--split", default=None, help="evaluation split name (default real); use a new one for fresh runs")
+    ap.add_argument("--seed0", type=int, default=None, help="first evaluation seed (default 8000)")
+    ap.add_argument("--faults", nargs="+", default=None, choices=FAULTS,
+                    help="restrict to these groups (default: none slow_tool slow_db)")
+    ap.add_argument("--variants", nargs="+", default=["base", "v2"], choices=["base", "v2", "v3", "v4"])
     ap.add_argument("--db", default=None)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--no-record", action="store_true")
     a = ap.parse_args()
+    global EVAL_SPLIT, EVAL_SEED0, FAULTS
+    EVAL_SPLIT = a.split or EVAL_SPLIT
+    EVAL_SEED0 = a.seed0 if a.seed0 is not None else EVAL_SEED0
+    FAULTS = a.faults or FAULTS
     con = store.connect(a.db)
     if not a.no_record:
         if not bpf_available():

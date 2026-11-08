@@ -43,7 +43,7 @@ SUITES = {
     "subtle": {"faults": ["none"] + SUBTLE_FAULTS, "magnitude": "subtle", "rules": ["coarse", "tight"]},
     "pairs": {"faults": TWO_FAULT_PAIRS, "magnitude": "normal", "rules": ["coarse"]},
 }
-LABEL = {"base": "base", "v2": "v2", "v3": "v3"}
+LABEL = {"base": "base", "v2": "v2", "v3": "v3", "v4": "v4"}
 
 
 @contextlib.contextmanager
@@ -78,11 +78,13 @@ def collect(con, suite, split, seed0, n, n_none, n_cal, force, cal_split=CAL_SPL
 def calibrate(con, rule, cal_split=CAL_SPLIT):
     runs = store.list_runs(con, cal_split, "none")
     profile = build_profile([store.load_spans(con, r["run_id"]) for r in runs], rule)
-    bds = []
+    bds, run_retx = [], []
     for r in runs:
         tl, _ = load_timeline(con, r["run_id"])
-        bds += [breakdown(e) for e in tl.entries if _is_http(e.span)]
-    return profile, build_kernel_profile(bds, rule)
+        these = [breakdown(e) for e in tl.entries if _is_http(e.span)]
+        bds += these
+        run_retx.append(sum(b["retransmits"] for b in these))
+    return profile, build_kernel_profile(bds, rule, run_retx)
 
 
 def diagnose(variant, spans, tl, profile, kprofile, seed):
@@ -92,6 +94,9 @@ def diagnose(variant, spans, tl, profile, kprofile, seed):
         out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True)
     elif variant == "v3":
         out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True, slow_api=True)
+    elif variant == "v4":
+        out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True, slow_api=True,
+                                latent_baseline=True)
     else:
         raise ValueError(variant)
     return [c.cause for c in out]
