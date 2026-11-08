@@ -53,7 +53,15 @@ such runs got no answer), and packet loss is not separable from the path's backg
 single samples) then found the faults on fresh real-network runs: DNS delay 10/10 and latency 9/10 (spans-only: 0/10), with 0/10
 false alarms on healthy runs and no change at all on 870 mock evaluations; packet loss stays at 70% and the detection floor is
 set by the path's own noise, about 1 s of latency and 2.3 s of DNS on that network, from 10 runs per group on one path
-([docs/results-stage10.md](docs/results-stage10.md)). The join itself stayed
+([docs/results-stage10.md](docs/results-stage10.md)).
+
+**Stage 11 (what was still untested).** The correlator was quadratic and is now linear (51,200 tasks in under a second); a sustained
+run at 512 simultaneous agents with reused ports had 0 wrong connections, and about 0.1% of connections lost their connect event only
+when they overflowed the server's accept queue (cause not established). **Async agents on one thread cannot be joined by pid and
+thread id** (0 of 1,280 spans correct at 64 coroutines); they can if the HTTP span records its socket's local port
+(`network.local.port`, then 100%), which is an instrumentation requirement. A remote server's wait measured from the client side was
+within tolerance on 95 of 96 TLS calls after I fixed a definition that session tickets fooled, and v5 found two simultaneous real
+faults in 7 of 8 and 6 of 10 runs ([docs/results-stage11.md](docs/results-stage11.md)). The join itself stayed
 correct under load: 5,120 of 5,120 spans got exactly their own connection with up to 512 simultaneous agent threads and no
 lost kernel events ([docs/results-stage9.md](docs/results-stage9.md)); async agents on one shared thread and real production
 load remain untested.

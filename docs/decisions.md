@@ -188,3 +188,18 @@ Running log. Newest at the bottom. Each entry: decision, why.
   (rf_b) and a 870-evaluation mock regression (identical to v4). The lower median (not the median) makes "persistent" mean more
   than half the calls. v5 is the version to use on a real network; its thresholds must be rebuilt from healthy runs on the
   deployment path, and its detection floor is whatever that path's own noise allows (about 1 s latency and 2.3 s DNS here).
+
+## D33. The correlator indexes its lookups (Stage 11)
+- Spans by (pid, thread) and by server port with a bisect over start times; connections by sorted port pair. Linear in events
+  instead of events x spans; rules unchanged. `eval/join_perf.py` and `tests/test_join_perf.py` guard it.
+
+## D34. Spans may declare their socket: `network.local.port` is the strongest join evidence (Stage 11)
+- Needed when many requests share one pid and thread (async). Connect events now carry the kernel socket pointer so connect-start can be
+  paired with connect-end. Spans without the attribute fall back to the older rules; requirement stated, not hidden.
+
+## D35. Remote-server wait = the longest silence after the request (Stage 11)
+- Replaced "first payload byte after the request" because TLS 1.3 session tickets arrive right after the request. Judged on fresh runs.
+
+## D36. A fix that did not help was reverted (Stage 11)
+- Emitting connect-end without the per-socket map entry changed nothing about the 0.1% missing events at 512 threads, so it was removed.
+  Kept: bpftrace lost-event warnings (no `-q`) and the unparseable-line counter. The gap tracks accept-queue overflow of the mock server.

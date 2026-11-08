@@ -93,10 +93,11 @@ class KernelCollector:
         # 3.5 ms once in 80 runs), so sample the pair often: a step is then confined to one interval.
         self.sync_interval_s = sync_interval_s
         self.events, self.clock_sync, self.stderr = [], [], ""
+        self.bad_lines = 0     # output lines that were not valid JSON (would be silently lost events)
 
     def __enter__(self):
         self._proc = subprocess.Popen(
-            ["sudo", "-n", "bpftrace", "-q", "-B", "none", "-e", program(self.dns_ports, self.ports, self.reduce_rtt, self.libc_dns, self.tcp_send)],
+            ["sudo", "-n", "bpftrace", "-B", "none", "-e", program(self.dns_ports, self.ports, self.reduce_rtt, self.libc_dns, self.tcp_send)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         self._ready = threading.Event()
         self._err = []
@@ -124,7 +125,8 @@ class KernelCollector:
             try:
                 ev = json.loads(line)
             except json.JSONDecodeError:
-                continue  # partial line at shutdown
+                self.bad_lines += 1   # counted, not hidden: partial line at shutdown, or a damaged event
+                continue
             if ev.get("via") == "libc" and _numeric(ev.get("host", "")):
                 continue   # getaddrinfo("127.0.0.1"): not a lookup, drop it (the correlator pairs lookups with hostnames)
             if ev["ev"] == "ready":
@@ -152,4 +154,6 @@ class KernelCollector:
         self._stop()
         self.events.sort(key=lambda e: e["t"])
         lost = [l for l in self.stderr.splitlines() if "lost" in l.lower() or "error" in l.lower()]
+        if self.bad_lines:
+            lost.append(f"{self.bad_lines} unparseable output line(s)")
         self.warnings = lost

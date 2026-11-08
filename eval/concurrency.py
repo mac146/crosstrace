@@ -25,7 +25,7 @@ from agent.tools import Tools, seed_db
 from agent.tracing import Tracing
 from collectors.ebpf import KernelCollector, available
 from correlator.integrity import check
-from correlator.join import _is_http, correlate
+from correlator.join import ClockMap, _is_http, correlate
 from mockservices.launcher import services
 
 TASK = "What is customer 42's order total and shipping status?"
@@ -69,6 +69,41 @@ def max_concurrent(spans):
         cur += d
         peak = max(peak, cur)
     return peak
+
+
+def describe_missing(http, events, clock_pairs):
+    """For spans that ended up with no connect_end: what do the RAW kernel events show about their real client port?
+    Categories: was a connect_start attached; was a tcp_send of that port attached; does a raw connect_end exist for that port
+    inside the span's window (=> it was lost in the join) or not at all (=> never emitted / never captured)."""
+    clock = ClockMap(clock_pairs)
+    ends_by_port = {}
+    for e in events:
+        if e["ev"] == "tcp_connect_end":
+            ends_by_port.setdefault(e["sport"], []).append(clock.to_wall(e["t"]))
+    cats, example = {}, None
+    for e in http:
+        if any(a.event["ev"] == "tcp_connect_end" for a in e.kernel):
+            continue
+        port = e.span["attrs"].get("crosstrace.debug.local_port")
+        if port is None:   # the request failed before its socket existed (reset, timeout): nothing to compare against
+            cats[("request failed, no ground-truth port",)] = cats.get(("request failed, no ground-truth port",), 0) + 1
+            continue
+        in_window = any(e.span["start_ns"] - 1_000_000 <= w <= e.span["end_ns"] + 1_000_000 for w in ends_by_port.get(port, []))
+        key = ("start attached" if any(a.event["ev"] == "tcp_connect_start" for a in e.kernel) else "no start",
+               "send attached" if any(a.event["ev"] == "tcp_send" for a in e.kernel) else "no send",
+               "raw end IN window" if in_window else "no raw end for its port in window")
+        cats[key] = cats.get(key, 0) + 1
+        if example is None:
+            a = e.span["attrs"]
+            def brief(x):
+                return (round((clock.to_wall(x["t"]) - e.span["start_ns"]) / 1e6, 2), x["ev"],
+                        {k: v for k, v in x.items() if k in ("sport", "dport", "bytes", "lat_ns")})
+            # the span's own attached events, and every raw event of the SAME thread around the span (any connection)
+            same_thread = [brief(x) for x in sorted(events, key=lambda x: x["t"])
+                           if x.get("pid") == a["process.pid"] and x.get("tid") == a["thread.id"]
+                           and e.span["start_ns"] - 30_000_000 <= clock.to_wall(x["t"]) <= e.span["end_ns"] + 30_000_000]
+            example = (port, e, {"attached": [brief(x.event) for x in e.kernel], "same thread raw": same_thread[:12]})
+    return cats, example
 
 
 def run_config(procs, threads, tasks):
@@ -116,7 +151,9 @@ def run_config(procs, threads, tasks):
                 "events": len(k.events), "wrong_connection": wrong, "no_connection": missing,
                 "foreign_events_attached": foreign, "pinned_orphans": pinned_orphans, "matches": matches,
                 "problems": len(problems), "warnings": k.warnings, "sample_problems": problems[:3],
-                "clock_jump_ms": tl.clock_max_jump_ns / 1e6, "error_kinds": error_kinds}
+                "clock_jump_ms": tl.clock_max_jump_ns / 1e6, "error_kinds": error_kinds,
+                "missing": describe_missing(http, k.events, k.clock_sync),
+                "raw_starts": sum(1 for e in k.events if e["ev"] == "tcp_connect_start")}
 
 
 def main():
@@ -138,6 +175,14 @@ def main():
         if r["problems"] or r["warnings"]:
             print(f"        integrity problems: {r['problems']}; collector warnings: {r['warnings'][:2]}; "
                   f"sample: {r['sample_problems'][:1]}", flush=True)
+        cats, example = r["missing"]
+        if cats:
+            print(f"        raw connect_start events: {r['raw_starts']}, connect_end events: {r['connects']}, "
+                  f"spans: {r['http_spans']}", flush=True)
+            print(f"        spans without a connection, by what the raw events show: {cats}", flush=True)
+            if example:
+                print(f"        example: real port {example[0]}, span {example[1].span['name']}; raw events of that port "
+                      f"(ms from span start): {example[2]}", flush=True)
         if r["error_kinds"]:
             print(f"        task errors by kind: {r['error_kinds']}", flush=True)
         print(f"        attached events by evidence: {r['matches']}; clock step during run: {r['clock_jump_ms']:.1f} ms",

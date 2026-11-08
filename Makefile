@@ -82,6 +82,17 @@ eval-real-faults:
 eval-concurrency:
 	$(PYTHON) -m eval.concurrency --configs 1x1 1x8 1x32 4x8 8x8 8x16 8x32 16x16 16x32 --total 160
 
+# --- Stage 11 (ROOT except join-perf). eval-async and eval-remote-wait need `make venv-real` (LangGraph, httpx, openssl).
+.PHONY: eval-join-perf eval-async eval-remote-wait eval-churn
+eval-join-perf:
+	$(PYTHON) -m eval.join_perf --sizes 200 800 3200 12800 51200
+eval-async:
+	$(PYTHON) -m eval.async_join --concurrency 1 8 64 --tasks 320
+eval-remote-wait:
+	$(PYTHON) -m eval.remote_wait --n 24 --seed 1101
+eval-churn:
+	$(PYTHON) -m eval.concurrency --configs 16x32 --total 15000
+
 # --- The whole experiment from an empty database, one command (ROOT, about 40 minutes, keep the machine idle). ---
 # Fault parameters are seeded and reproduce exactly; timings and therefore exact percentages vary a little from
 # run to run (see README, "Reproducibility"). The full report is also saved to $(REPRO_DIR)/report.txt.
