@@ -66,6 +66,13 @@ correct under load: 5,120 of 5,120 spans got exactly their own connection with u
 lost kernel events ([docs/results-stage9.md](docs/results-stage9.md)); async agents on one shared thread and real production
 load remain untested.
 
+**Stage 12 (the biggest gaps).** The missing connect events were a probe problem: the tracepoint was skipped when another BPF program
+ran on the same CPU, and an fentry hook saw every one of those connections, so it is now the default (0.1% missing became 0.004%).
+Packet loss on the real NAT'd path is still not separable from the network's own retransmits: a better-looking rule on the design
+runs failed on fresh data, so the old rule stays (a negative result). A compiled C/libbpf collector cut collector CPU 2.9x (5.05 to
+1.72 ms per 60 ms run; I predicted 3.4x and missed) with the same join integrity (160/160) and the same 512-thread completeness
+([docs/results-stage12.md](docs/results-stage12.md)).
+
 **How much to trust this**
 
 * The network gain is close to built in by the design of the experiment: the baseline cannot separate those causes
@@ -142,18 +149,21 @@ Tested on Windows 11 + WSL2 (Ubuntu 26.04, kernel 6.6.87.2, Python 3.14, bpftrac
 
 ```bash
 sudo apt-get install -y bpftrace iproute2 make python3-venv python3-pip curl
+sudo apt-get install -y clang libbpf-dev linux-tools-generic   # optional: only to build the compiled collector (needs bpftool)
 git clone <this repo> && cd crosstrace
 ./scripts/00_feasibility.sh      # ROOT: checks eBPF and netem work on this kernel (briefly touches the loopback qdisc)
-./scripts/setup_sudoers.sh       # ROOT, once: passwordless sudo for tc and bpftrace. READ THE WARNING BELOW
+make -C collectors/ctrace        # optional: build the compiled collector (into ~/.crosstrace-build)
+./scripts/setup_sudoers.sh       # ROOT, once (rerun after rebuilding): passwordless sudo for tc, bpftrace and the compiled collector. READ THE WARNING BELOW
 make venv                        # pinned dependencies (requirements-dev.txt)
-make test                        # 119 tests; the one live eBPF test is skipped if bpftrace is not usable
+make test                        # 252 tests; live eBPF tests are skipped if the collectors are not usable
 make reproduce                   # ROOT, ~40 min, keep the machine idle: both evaluation sets + overhead
 ```
 
 **Warnings.** The fault harness changes network settings on `lo` (it adds and removes a `tc` qdisc) and the collector
-runs `bpftrace`. Run this only inside a throwaway dev WSL/VM. `setup_sudoers.sh` lets your user run *any* `tc` and
+runs `bpftrace` (or the compiled collector). Run this only inside a throwaway dev WSL/VM. `setup_sudoers.sh` lets your user run *any* `tc` and
 *any* `bpftrace` program as root without a password, which is effectively root; undo it with
-`sudo rm /etc/sudoers.d/crosstrace`. If a crash leaves a stale qdisc: `sudo tc qdisc del dev lo root`.
+`sudo rm -r /etc/sudoers.d/crosstrace /usr/local/libexec/crosstrace`. The compiled collector is copied to that
+root-owned folder and only that path is allowed (never a binary in a user-writable directory). If a crash leaves a stale qdisc: `sudo tc qdisc del dev lo root`.
 Keep the repo's runtime data (SQLite, venv) on the Linux filesystem; the default is `~/.crosstrace-data` and
 `~/.venvs/crosstrace`. SQLite file locking misbehaves on `/mnt/c`.
 
@@ -170,11 +180,11 @@ statement of that. Healthy-duration thresholds are rebuilt from fresh calibratio
 ## Repository layout
 
 ```
-agent/        target agent, tools, OTel tracing, DNS client      collectors/   bpftrace program, wrapper, SQLite store
+agent/        target agent, tools, OTel tracing, DNS client      collectors/   bpftrace + C/libbpf collectors, SQLite store
 mockservices/ mock LLM, API and DNS servers                      correlator/   clock alignment, join, integrity checks, renderer
 faultlab/     fault catalog, tc netem controller, run harness    diagnosers/   baseline, combined, healthy-profile thresholds
 eval/         metrics, evaluation runners, overhead benchmark    scripts/      feasibility check, sudoers setup, healthy demo
-tests/        119 tests (join, diagnosers, metrics, live eBPF)   docs/         decisions.md (D1-D26), results-stage1..4,6.md
+tests/        252 tests (join, diagnosers, metrics, live eBPF)   docs/         decisions.md (D1-D39), results-stage1..12.md
 ```
 
 `docs/decisions.md` records every design decision and why, including the ones that were changed after results came in.
