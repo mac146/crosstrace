@@ -25,7 +25,7 @@ def _read(name):
         return f.read()
 
 
-def program(dns_ports, ports=None, reduce_rtt=False, libc_dns=False, tcp_send=False):
+def program(dns_ports, ports=None, reduce_rtt=False, libc_dns=False, tcp_send=False, connect_fentry=False):
     """bpftrace program text.
 
     ports: restrict TCP events to these service ports (None = record all TCP).
@@ -38,12 +38,15 @@ def program(dns_ports, ports=None, reduce_rtt=False, libc_dns=False, tcp_send=Fa
         connect_cond = " || ".join(f"$port == {int(p)}" for p in ports)
         flow_cond = " || ".join(f"args->sport == {int(p)} || args->dport == {int(p)}" for p in ports)
         send_cond = " || ".join(f"$sport == {int(p)} || $dport == {int(p)}" for p in ports)
+        fentry_cond = " || ".join(f"$dport == {int(p)}" for p in ports)
     else:
-        connect_cond = flow_cond = send_cond = "1"
+        connect_cond = flow_cond = send_cond = fentry_cond = "1"
     rtt_cond = "args->data_len > 0 || args->srtt > 20000" if reduce_rtt else "1"
     gai = _read("probe_getaddrinfo.bt").replace("@@LIBC@@", LIBC) if libc_dns else ""
     send = _read("probe_tcp_send.bt").replace("@@SEND_COND@@", send_cond) if tcp_send else ""
+    fentry = _read("probe_connect_fentry.bt").replace("@@FENTRY_COND@@", fentry_cond) if connect_fentry else ""
     return (_read("net_events.bt").replace("@@GAI_PROBES@@", gai).replace("@@SEND_PROBE@@", send)
+            .replace("@@FENTRY_PROBE@@", fentry)
             .replace("@@DNS_COND@@", dns_cond).replace("@@CONNECT_COND@@", connect_cond)
             .replace("@@FLOW_COND@@", flow_cond).replace("@@RTT_COND@@", rtt_cond))
 
@@ -83,8 +86,8 @@ def available():
 
 class KernelCollector:
     def __init__(self, dns_ports=(53,), start_timeout=30, sync_interval_s=0.1, ports=None,
-                 reduce_rtt=False, libc_dns=False, tcp_send=False):
-        self.libc_dns, self.tcp_send = libc_dns, tcp_send
+                 reduce_rtt=False, libc_dns=False, tcp_send=False, connect_fentry=False):
+        self.libc_dns, self.tcp_send, self.connect_fentry = libc_dns, tcp_send, connect_fentry
         self.dns_ports = list(dns_ports)
         self.ports = list(ports) if ports else None   # TCP service ports to keep; None = all
         self.reduce_rtt = reduce_rtt
@@ -97,7 +100,8 @@ class KernelCollector:
 
     def __enter__(self):
         self._proc = subprocess.Popen(
-            ["sudo", "-n", "bpftrace", "-B", "none", "-e", program(self.dns_ports, self.ports, self.reduce_rtt, self.libc_dns, self.tcp_send)],
+            ["sudo", "-n", "bpftrace", "-B", "none", "-e", program(self.dns_ports, self.ports, self.reduce_rtt, self.libc_dns, self.tcp_send,
+                                    self.connect_fentry)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         self._ready = threading.Event()
         self._err = []

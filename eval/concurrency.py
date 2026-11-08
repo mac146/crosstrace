@@ -80,6 +80,11 @@ def describe_missing(http, events, clock_pairs):
     for e in events:
         if e["ev"] == "tcp_connect_end":
             ends_by_port.setdefault(e["sport"], []).append(clock.to_wall(e["t"]))
+    fe_by_port = {}
+    for e in events:
+        if e["ev"] == "tcp_connect_end_f":
+            fe_by_port.setdefault(e["sport"], []).append(clock.to_wall(e["t"]))
+    have_fentry = bool(fe_by_port)
     cats, example = {}, None
     for e in http:
         if any(a.event["ev"] == "tcp_connect_end" for a in e.kernel):
@@ -91,7 +96,10 @@ def describe_missing(http, events, clock_pairs):
         in_window = any(e.span["start_ns"] - 1_000_000 <= w <= e.span["end_ns"] + 1_000_000 for w in ends_by_port.get(port, []))
         key = ("start attached" if any(a.event["ev"] == "tcp_connect_start" for a in e.kernel) else "no start",
                "send attached" if any(a.event["ev"] == "tcp_send" for a in e.kernel) else "no send",
-               "raw end IN window" if in_window else "no raw end for its port in window")
+               "raw end IN window" if in_window else "no raw end for its port in window") + (
+            (("fentry end seen" if any(e.span["start_ns"] - 1_000_000 <= w <= e.span["end_ns"] + 1_000_000
+                                       for w in fe_by_port.get(port, [])) else "fentry end NOT seen"),)
+            if have_fentry else ())
         cats[key] = cats.get(key, 0) + 1
         if example is None:
             a = e.span["attrs"]
@@ -113,7 +121,8 @@ def run_config(procs, threads, tasks):
         spec = (svc.llm_url, svc.api_url, svc.dns_server, db, threads, tasks)
         ctx = multiprocessing.get_context("spawn")      # fork after threads exist is unsafe
         with KernelCollector(dns_ports=[svc.dns_server[1]], ports=[svc.api_port, svc.llm_port],
-                             reduce_rtt=True, tcp_send=True) as k:
+                             reduce_rtt=True, tcp_send=True,
+                             connect_fentry=os.environ.get("CT_FENTRY") == "1") as k:
             t0 = time.time()
             with concurrent.futures.ProcessPoolExecutor(procs, mp_context=ctx) as ex:
                 results = list(ex.map(worker, [spec] * procs))

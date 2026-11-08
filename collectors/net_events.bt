@@ -106,6 +106,8 @@ tracepoint:tcp:tcp_probe
 
 @@SEND_PROBE@@
 
+@@FENTRY_PROBE@@
+
 END {
   clear(@dns_t); clear(@c_t); clear(@o_pid); clear(@o_tid);
 }

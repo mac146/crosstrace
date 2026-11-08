@@ -3,6 +3,7 @@
 GET /shipping/<customer_id> -> fixed JSON. --delay-ms is a fault hook for later stages.
 """
 import argparse
+import os
 import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,7 +35,8 @@ class Handler(BaseHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     # socketserver's default listen backlog is 5: with dozens of simultaneous clients the kernel resets the surplus
     # connections ("Connection reset by peer"), which is a limit of this test server, not of the thing being measured.
-    request_queue_size = 2048    # above the largest test concurrency (512): no accept-queue overflow
+    # listen backlog; env MOCK_BACKLOG lowers it to provoke accept-queue overflow (Stage 12 experiments)
+    request_queue_size = int(os.environ.get("MOCK_BACKLOG", "2048"))
     daemon_threads = True
 
 

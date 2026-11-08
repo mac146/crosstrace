@@ -1,0 +1,17 @@
+/*
+ * Optional probe: connection completion seen through an fentry hook on tcp_finish_connect(), reported as "tcp_connect_end_f".
+ * Spliced into net_events.bt by collectors/ebpf.py (@@FENTRY_COND@@ is the port filter on $dport).
+ * Why it exists: under heavy load about 0.1% of connections lost their tcp_connect_end from the sock:inet_sock_set_state
+ * tracepoint (Stage 11). kprobes and tracepoints are skipped when they fire while another BPF program is already running on
+ * the same CPU; fentry hooks have a per-program guard instead. Recording both in one run shows which one the loss belongs to.
+ * It runs in softirq context, so pid/tid are not meaningful; the event is matched by its ports.
+ */
+fentry:vmlinux:tcp_finish_connect
+{
+  $sk = args->sk;
+  $dport = ($sk->__sk_common.skc_dport >> 8) | (($sk->__sk_common.skc_dport & 0xff) << 8);
+  if (@@FENTRY_COND@@) {
+    printf("{\"ev\":\"tcp_connect_end_f\",\"t\":%llu,\"sport\":%d,\"dport\":%d,\"sk\":%llu}\n",
+           nsecs, $sk->__sk_common.skc_num, $dport, (uint64)$sk);
+  }
+}
