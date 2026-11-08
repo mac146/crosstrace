@@ -107,7 +107,26 @@ def available():
         return False
 
 
-class KernelCollector:
+def _c_wanted():
+    """CROSSTRACE_COLLECTOR: 'bpftrace' (default), 'c' (compiled, must be installed) or 'auto' (compiled if installed)."""
+    mode = os.environ.get("CROSSTRACE_COLLECTOR", "bpftrace")
+    if mode == "bpftrace":
+        return False
+    from collectors import cebpf
+    if mode == "c":
+        return True
+    return cebpf.available()
+
+
+def KernelCollector(*args, **kwargs):
+    """The kernel collector selected by CROSSTRACE_COLLECTOR (same interface either way)."""
+    if _c_wanted():
+        from collectors import cebpf
+        return cebpf.CCollector(*args, **kwargs)
+    return BpftraceCollector(*args, **kwargs)
+
+
+class BpftraceCollector:
     def __init__(self, dns_ports=(53,), start_timeout=30, sync_interval_s=0.1, ports=None,
                  reduce_rtt=False, libc_dns=False, tcp_send=False, connect_fentry=False, connect_end=None):
         self.libc_dns, self.tcp_send, self.connect_fentry = libc_dns, tcp_send, connect_fentry
