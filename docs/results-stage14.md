@@ -31,7 +31,8 @@ Intervals (n=20): 100% = [84, 100], 0% = [0, 16]. Predictions 1-5 all held, incl
 - **The mixed scenario was designed by me to discriminate**, from the question "where could per-call evidence matter?". It is a plausible
   situation (two different problems at one service within a run) but not a measured frequency of anything real.
 - `obi` is an EMULATION of the information content of an eBPF auto-instrumentation agent, not Beyla/OBI itself, which was not installed or
-  run. A real agent also gives server-side spans and propagation that this does not model.
+  run. **Corrected in Stage 15 ([results-stage15.md](results-stage15.md)):** real OBI v1.0.0 was run on the same scenarios; the emulation was too
+  pessimistic on latency (it counted network delay as server time), real OBI scores at chance level there, not 0%, and still far below the join. A real agent also gives server-side spans and propagation that this does not model.
 - The runs are sequential (one agent, four calls) on loopback with mock servers. The join was checked separately under 512 concurrent threads
   (Stage 9/12), but the pooled-vs-joined comparison was NOT repeated under concurrency, where host-wide and per-destination counters mix many
   agents' traffic and the gap should grow; that is untested.

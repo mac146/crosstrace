@@ -85,6 +85,11 @@ but no network cause. The join only wins when two different problems hit the sam
 scenario I designed to discriminate. The join held at 100% with 8 and 32 agents running at once and no lost events (lockstep threads on mocks)
 while the cheap baselines stayed at 0% ([docs/results-stage14.md](docs/results-stage14.md)).
 
+**Stage 15 (real OBI).** I ran the real OpenTelemetry eBPF agent (v1.0.0, official release, checksum-verified, signature not verified) on the
+Stage 14 scenarios. Its per-request server duration named a slow server on 100% of runs and matched the injected delay on every slow call, but it names
+no network cause from timing alone (15-40%, chance level), and the join stayed at 100%. My earlier emulation had been too pessimistic about it
+([docs/results-stage15.md](docs/results-stage15.md)). Untested: OBI's own network metrics.
+
 **How much to trust this**
 
 * The network gain is close to built in by the design of the experiment: the baseline cannot separate those causes

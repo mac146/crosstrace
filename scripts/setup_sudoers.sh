@@ -45,5 +45,5 @@ if [ -x "$DEST" ]; then
   [ "$rc" -eq 2 ] && echo "OK: passwordless ctrace works"
 fi
 if [ -x "$OBI_DEST" ]; then
-  if sudo -n "$OBI_DEST" --version >/dev/null 2>&1; then echo "OK: passwordless obi runs"; else echo "note: obi installed but --version did not succeed"; fi
+  if sudo -n "$OBI_DEST" -help 2>&1 | grep -q "Usage of"; then echo "OK: passwordless obi runs"; else echo "note: obi installed but did not start"; fi
 fi

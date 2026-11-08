@@ -104,7 +104,7 @@ def pooled(bds_by_span):
 
 
 def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, slow_api=False,
-             latent_baseline=False, run_level=False, source="joined", pool_entries=None):
+             latent_baseline=False, run_level=False, source="joined", pool_entries=None, obi_waits=None):
     """source (Stage 14 adds "pooled_port" and "obi"): "joined" (default, each step's own kernel events), "pooled" (run-wide host-metric numbers for every step, no
     server wait) or "pooled_wait" (as pooled plus the run's maximum server wait: an upper bound on a metrics stack).
 
@@ -125,7 +125,7 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
         scores[cause] = scores.get(cause, 0.0) + amount
         evidence.setdefault(cause, []).append(why)
 
-    if source not in ("joined", "pooled", "pooled_wait", "pooled_port", "obi"):
+    if source not in ("joined", "pooled", "pooled_wait", "pooled_port", "obi", "obi_real"):
         raise ValueError(source)
     # pool_entries (Stage 14, concurrency): the HTTP entries of EVERY agent on the host. The pooled sources then pool over all of them,
     # as shared host counters would; the diagnosed agent's own steps still come from `timeline`. Default: this timeline's own HTTP spans.
@@ -148,6 +148,10 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
                 p = pooled(g)
                 p["server_wait_ms"] = p["_wait_if_generous"]
                 override.update({sid: p for sid in g})
+        elif source == "obi_real":
+            # real OBI output: its per-request server duration (None when OBI reported nothing for that request); nothing else
+            override = {sid: {**b, "dns_ms": None, "connect_ms": None, "retransmits": 0, "srtt_max_ms": None,
+                              "server_wait_ms": (obi_waits or {}).get(sid)} for sid, b in own.items()}
         else:
             # obi: an auto-instrumentation agent's information content: a per-request server duration, nothing about DNS/RTT/loss
             override = {sid: {**b, "dns_ms": None, "connect_ms": None, "retransmits": 0, "srtt_max_ms": None}

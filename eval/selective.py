@@ -55,7 +55,7 @@ def latency_window(port, delay_ms):
         time.sleep(2 * delay_ms / 1000 + 0.1)
 
 
-def one_run(scenario, seed, db):
+def one_run(scenario, seed, db, ready_hook=None):
     cfg = SCENARIOS[scenario]
     rng = random.Random(f"{scenario}:{seed}")
     slow_ms, lat_ms = rng.randint(300, 1000), rng.randint(75, 250)
@@ -77,6 +77,8 @@ def one_run(scenario, seed, db):
             tools_a = Tools(db, svc.api_url, svc.dns_server, tracing)
             tools_b = Tools(db, f"http://{launcher.API_HOST}:{port_b}", svc.dns_server, tracing) if port_b else tools_a
             with KernelCollector(dns_ports=[svc.dns_server[1]], ports=ports, reduce_rtt=True) as k:
+                if ready_hook:      # Stage 15: wait until the real OBI has attached to the servers, before any call is made
+                    ready_hook([svc.pids["api"]] + [p.pid for p in procs], ports)
                 with contextlib.ExitStack() as stack:
                     if port_b:
                         stack.enter_context(latency_window(port_b, lat_ms))        # B's whole path is slow
@@ -92,7 +94,7 @@ def one_run(scenario, seed, db):
                                     tools.call("http_api", {"path": f"/shipping/{i}"})
                 time.sleep(0.2)
             return {"spans": tracing.spans(), "events": k.events, "sync": [list(c) for c in k.clock_sync],
-                    "warnings": k.warnings}
+                    "warnings": k.warnings, "ports": ports, "inject": {"slow_ms": slow_ms, "lat_ms": lat_ms}}
         finally:
             for p in procs:
                 p.terminate()
