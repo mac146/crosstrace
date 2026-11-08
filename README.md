@@ -87,8 +87,10 @@ while the cheap baselines stayed at 0% ([docs/results-stage14.md](docs/results-s
 
 **Stage 15 (real OBI).** I ran the real OpenTelemetry eBPF agent (v1.0.0, official release, checksum-verified, signature not verified) on the
 Stage 14 scenarios. Its per-request server duration named a slow server on 100% of runs and matched the injected delay on every slow call, but it names
-no network cause from timing alone (15-40%, chance level), and the join stayed at 100%. My earlier emulation had been too pessimistic about it
-([docs/results-stage15.md](docs/results-stage15.md)). Untested: OBI's own network metrics.
+no network cause from timing alone (15-40%, chance level), and the join stayed at 100%. My earlier emulation had been too pessimistic about it.
+With its per-connection RTT statistics matched to calls by port and order, OBI comes within one run of the join (95-100%) in these sequential
+scenarios, while its Prometheus-style aggregates fail on mixed problems (0-5%); I did not test either against concurrency, where order matching
+cannot work and the join's advantage would have to show ([docs/results-stage15.md](docs/results-stage15.md)).
 
 **How much to trust this**
 

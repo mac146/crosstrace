@@ -36,6 +36,12 @@ LOG = "/tmp/obi_stage15.log"
 CONFIG = """log_level: info
 trace_printer: text
 route_harvester_timeout: 0s
+prometheus_export:
+  port: 9464
+  features: ["application", "stats"]
+stats:
+  enable: true
+  print_stats: true
 discovery:
   poll_interval: 500ms
   instrument:
@@ -47,6 +53,12 @@ discovery:
 HTTP_LINE = re.compile(r"\((?P<dur>[0-9.]+)(?P<unit>µs|ms|s)\[[^\]]*\]\) HTTP\(subType=\d+\) (?P<status>\d+) (?P<method>[A-Z]+) "
                        r"(?P<path>\S+?)\(.*?\) \[[^\]]*\]->\[[^\]]* as [^:]*:(?P<port>\d+)\]")
 UNIT_MS = {"µs": 1e-3, "ms": 1.0, "s": 1000.0}
+STATS_LINE = re.compile(r"^stats: .*? src\.port=(?P<src>\d+) dst\.port=(?P<dst>\d+) srtt=(?P<srtt>\d+)\s*$", re.M)
+
+
+def parse_stats(text):
+    """[(src_port, dst_port, srtt_us)] from OBI's printed connection statistics, in print order (one line per end of a connection)."""
+    return [(int(m["src"]), int(m["dst"]), int(m["srtt"])) for m in STATS_LINE.finditer(text)]
 
 
 def parse_log(text):
@@ -136,6 +148,7 @@ def record(path, n, n_cal):
             if k % 10 == 0:
                 print(f"  {k}/{len(todo)} runs", file=sys.stderr, flush=True)
     data["_obi"] = [list(x) for x in parse_log(open(LOG).read())]
+    data["_obi_stats"] = [list(x) for x in parse_stats(open(LOG).read())]
     json.dump(data, open(path, "w"))
     return data
 
@@ -162,6 +175,30 @@ def all_obi_waits(runs, obi_calls):
     return out
 
 
+def rtts_per_span(runs, stats):
+    """rid -> {span_id: connection RTT in ms}, matching each call to its connection by destination port and order.
+    Runs are taken newest first and the LAST n client-side lines of a port are used, so the warm-up connections that precede a run's calls
+    (and an older run that shared the port) are never mistaken for its calls."""
+    by_port = {}
+    for src, dst, srtt in stats:
+        by_port.setdefault(dst, []).append(srtt / 1000.0)         # client-side socket: destination = the server's port
+    out = {}
+    for rid, r in reversed(list(runs.items())):
+        spans = sorted((s for s in r["spans"] if "server.port" in s["attrs"] and "url.full" in s["attrs"]), key=lambda s: s["start_ns"])
+        per_port = {}
+        for s in spans:
+            per_port.setdefault(s["attrs"]["server.port"], []).append(s)
+        res = {}
+        for port, ss in per_port.items():
+            lines = by_port.get(port, [])
+            take = lines[len(lines) - len(ss):] if len(lines) >= len(ss) else []
+            del lines[len(lines) - len(take):]
+            for s, v in zip(ss, take):
+                res[s["span_id"]] = v
+        out[rid] = res
+    return out
+
+
 def evaluate(data):
     obi_calls = [tuple(x) for x in data.get("_obi", [])]
     runs = {k: v for k, v in data.items() if not k.startswith("_")}
@@ -170,12 +207,18 @@ def evaluate(data):
     profile = build_profile([r["spans"] for r in cal], "coarse")
     kprofile = kernel_profile_from_timelines(cal_tl, "coarse")
     waits_by_run = all_obi_waits(runs, obi_calls)
+    stats = [tuple(x) for x in data.get("_obi_stats", [])]
+    rtt_by_run = rtts_per_span(runs, stats) if stats else {}
+    healthy_rtt = [v for rid, r in runs.items() if r["role"] == "calib" for v in rtt_by_run.get(rid, {}).values()]
     healthy_obi = [v for rid, r in runs.items() if r["role"] == "calib" for v in waits_by_run[rid].values()]
     kp_obi = dict(kprofile)
     kp_obi["server_wait_ms"] = _threshold(healthy_obi, "coarse")           # OBI's own healthy calibration
+    kp_net = dict(kp_obi)
+    if healthy_rtt:
+        kp_net["srtt_ms"] = _threshold(healthy_rtt, "coarse")           # OBI's own healthy RTT calibration
     print(f"calibration: {len(cal)} healthy runs, OBI saw {len(healthy_obi)}/{4 * len(cal)} calls; server-wait threshold: our collector "
           f"{kprofile['server_wait_ms']:.0f} ms, OBI {kp_obi['server_wait_ms']:.0f} ms")
-    results, agree, missing, ports_seen = {}, [], 0, {}
+    results, agree, missing, ports_seen, seen_rtt = {}, [], 0, {}, 0
     for n, (rid, r) in enumerate(sorted(runs.items())):
         if r["role"] != "eval":
             continue
@@ -191,15 +234,23 @@ def evaluate(data):
             ours, theirs = breakdown(e)["server_wait_ms"], waits.get(e.span["span_id"])
             if theirs is not None and ours is not None and theirs > 0.5 * inj:
                 agree.append((inj, ours, theirs))
+        flow_rtt = rtt_by_run.get(rid, {})
+        run_rtt = max(flow_rtt.values()) if flow_rtt else None
+        net_rtt = {sid: run_rtt for sid in flow_rtt} if run_rtt is not None else {}
+        seen_rtt += len(flow_rtt)
         ranked = {"base": [c.cause for c in baseline.diagnose(r["spans"], profile, tie_seed=seed, api_causes=EXT4)]}
         for arm, src, kp in (("v3", "joined", kprofile), ("pool", "pooled", kprofile), ("pool_port", "pooled_port", kprofile),
-                             ("obi", "obi", kprofile), ("obi_real", "obi_real", kp_obi)):
+                             ("obi", "obi", kprofile), ("obi_real", "obi_real", kp_obi),
+                             ("obi_real+net", "obi_real_net", kp_net), ("obi_real+flows", "obi_real_flows", kp_net)):
             ranked[arm] = [c.cause for c in combined.diagnose(tl, profile, kp, tie_seed=seed, loss_explains_rtt=True,
-                                                              slow_api=True, source=src, obi_waits=waits)]
+                                                              slow_api=True, source=src, obi_waits=waits,
+                                                              obi_srtts=net_rtt if src == "obi_real_net" else flow_rtt)]
         results.setdefault(r["scenario"], []).append({"ranked": ranked, "http": len(https),
                                                       "with_events": sum(1 for e in https if e.kernel),
                                                       "orphans": len(tl.orphans), "warnings": r["warnings"]})
     dup = sum(1 for v in ports_seen.values() if len(v) > 1)
+    print(f"OBI connection RTT lines matched to {seen_rtt} of {sum(len([s for s in r['spans'] if 'server.port' in s['attrs']]) for r in runs.values() if r['role'] == 'eval')} "
+          f"scenario calls; healthy RTT threshold from OBI: {kp_net['srtt_ms']:.0f} ms (ours {kprofile['srtt_ms']:.0f} ms)")
     return results, agree, missing, dup
 
 
@@ -207,7 +258,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=20)
     ap.add_argument("--cal", type=int, default=30)
-    ap.add_argument("--out", default=os.path.expanduser("~/.crosstrace-data/selective_obi.json"))
+    ap.add_argument("--out", default=os.path.expanduser("~/.crosstrace-data/selective_obi2.json"))
     ap.add_argument("--no-record", action="store_true")
     a = ap.parse_args()
     if not a.no_record:
@@ -218,7 +269,7 @@ def main():
     else:
         data = json.load(open(a.out))
     results, agree, missing, dup = evaluate(data)
-    selective.ARMS = ["base", "v3", "pool", "pool_port", "obi", "obi_real"]
+    selective.ARMS = ["base", "v3", "pool", "pool_port", "obi", "obi_real", "obi_real+net", "obi_real+flows"]
     selective.report(results)
     if agree:
         ok = sum(1 for inj, ours, theirs in agree if abs(theirs - ours) <= max(0.10 * ours, 30.0))

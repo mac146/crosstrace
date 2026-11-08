@@ -57,3 +57,39 @@ calls the server answered slowly: within max(10%, 30 ms) of ours 118/118, and of
 ## Limits
 Same as Stage 14 (mock services, loopback, sequential single agent, scenarios designed to discriminate), plus: one OBI version and one configuration,
 tuned by me to work on this machine; OBI's application-agent features (client spans, trace propagation) were not used; the signature was not verified.
+
+## Part 2: OBI with its network statistics (predictions: predictions-stage15.md, Part 2, committed before this run)
+Same 130-run recording procedure, with OBI's `stats` mode on (it needs a metrics exporter that lists the `stats` feature) and its printer. OBI printed
+a client-side RTT line for **400 of 400** scenario calls. Arms: `obi_real+net` (run-wide maximum RTT, the information OBI's Prometheus metrics hold,
+which are aggregated by address pair only) and `obi_real+flows` (each call's own connection RTT from OBI's printed statistics, matched to the call by
+destination port and order of connection). OBI's own healthy runs gave the RTT threshold (50 ms).
+
+| scenario (truth) | v3 joined | obi_real | **obi_real+net** | **obi_real+flows** |
+|---|---|---|---|---|
+| none: said "none" | 20/20 | 20/20 | 20/20 | 20/20 |
+| sel_slow_api (top-1) | 100% | 100% | 100% | 100% |
+| sel_latency (top-1) | 100% | 15% | **100%** | **100%** |
+| two_servers (both in top 2) | 100% | 35% | **5%** | **100%** |
+| mixed_one_server (both in top 2) | 100% | 25% | **0%** | **95%** [76, 99] |
+
+Predictions 7-11 all **held** (400/400 matched; both at 100% on latency; flows 100% and net 5% on two_servers; flows 95% and net 0% on mixed;
+no healthy false alarms). Neither "I would be wrong" condition was triggered.
+
+## What this changes (the honest reading)
+- **In the sequential case, real OBI plus its per-connection RTT statistics, matched to calls by port and order, comes within one run of the join**
+  (95% vs 100% on the mixed scenario, 100% vs 100% on two servers). So the diagnostic value in these scenarios is carried by per-call network RTT plus
+  per-request server timing, which OBI provides; our correlator is not what makes the difference here. The Stage 14 conclusion "the join is needed
+  for mixed problems at one destination" holds only in the weaker form: per-call evidence is needed, and it can come from OBI.
+- **OBI as most teams would consume it (Prometheus metrics, aggregated by address pair) behaves like `obi_real+net`**: it ties the join on a single
+  latency fault but scores 5% and 0% when two different problems are present. Per-connection data exists only in OBI's printed statistics, which I
+  used; I do not know a stable, documented way to read it as telemetry.
+- **What the join still has that this glue does not:** matching that does not depend on connection order. Order matching needs sequential calls to the
+  same server and one new connection per call; with concurrent agents, reused connections or async clients it breaks, while our correlator uses
+  pid/thread, the connection's four-tuple and declared socket ports (validated up to 512 threads and 64 coroutines). **That comparison, OBI plus glue
+  under concurrency, was not run** and is where the join's real advantage would have to be shown.
+- **What none of this tests:** packet loss and retransmits (the printed lines carry no event type; no scenario injects loss), DNS timing (OBI has none; the
+  scenarios have a healthy resolver), real model providers, other OBI versions or configurations.
+
+## Limits of part 2
+One OBI version and configuration; `print_stats` is a debugging-style output whose format I parsed with a regular expression; order matching is a
+construction of mine, not an OBI feature; scenarios are the designed Stage 14 ones on mock services; n = 20 per scenario.
