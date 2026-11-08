@@ -44,8 +44,10 @@ TASK = "What is customer 42's order total and shipping status?"
 ARMS = ["untraced", "otel-legacy", "otel", "otel+ebpf-all", "otel+ebpf-filtered", "untraced-ctrl"]
 # Stage 12: what does each part of the collector cost? (ports filtered and pure-ACK RTT dropped in all of them)
 STAGE12_ARMS = ["untraced", "otel", "ebpf-tracepoint", "ebpf-fentry", "ebpf-fentry+send", "untraced-ctrl"]
+STAGE12D_ARMS = ["untraced", "otel", "ebpf-c", "ebpf-c-slowsync", "untraced-ctrl"]      # diagnostic only
 STAGE12C_ARMS = ["untraced", "otel", "ebpf-fentry", "ebpf-c", "ebpf-c+send", "untraced-ctrl"]
-COLLECTOR_ARMS = {"ebpf-c": {"backend": "c"},                                 # compiled collector (C + libbpf), decoded after the run
+COLLECTOR_ARMS = {"ebpf-c": {"backend": "c"},
+                  "ebpf-c-slowsync": {"backend": "c", "sync_interval_s": 1000},                                 # compiled collector (C + libbpf), decoded after the run
                   "ebpf-c+send": {"backend": "c", "tcp_send": True},
                   "ebpf-tracepoint": {"connect_end": "tracepoint"},          # the collector as it was before Stage 12
                   "ebpf-fentry": {"connect_end": "fentry"},                  # the new default (reliable under load)
@@ -206,7 +208,7 @@ def report(blocks, rounds):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rounds", type=int, default=12)
-    ap.add_argument("--arms", choices=["stage6", "stage12", "stage12c"], default="stage6",
+    ap.add_argument("--arms", choices=["stage6", "stage12", "stage12c", "stage12d"], default="stage6",
                     help="stage12: compare the collector's parts (tracepoint vs fentry connect-end, with/without TCP-send probe)")
     ap.add_argument("--agent-iters", type=int, default=40)
     ap.add_argument("--api-iters", type=int, default=30)
@@ -216,6 +218,8 @@ def main():
         ARMS = STAGE12_ARMS
     elif a.arms == "stage12c":
         ARMS = STAGE12C_ARMS
+    elif a.arms == "stage12d":
+        ARMS = STAGE12D_ARMS
     if not available():
         sys.exit("needs passwordless sudo bpftrace: run scripts/setup_sudoers.sh once")
     report(collect(a.rounds, a.agent_iters, a.api_iters), a.rounds)

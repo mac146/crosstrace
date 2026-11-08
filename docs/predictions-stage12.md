@@ -51,3 +51,11 @@ Same events, same field names, same clock (CLOCK_MONOTONIC), so the correlator a
 
 I would be wrong if CPU per run is not at least halved (8), if integrity drops below 100% or the churn gap exceeds the bpftrace
 fentry level (9), or if a verifier or attach failure forces dropping any of the probes (then the C collector is incomplete and I say so).
+
+## E. Where the compiled collector's remaining in-process CPU goes (written BEFORE the run)
+Measured: 0.72 ms per 60 ms agent run inside the agent process (Python reader thread + the clock-sync thread, which samples
+the monotonic/wall pair 3 times every 100 ms), plus 1.00 ms in the ctrace process.
+12. Diagnostic arm: identical collector but the clock-sync interval stretched to 1000 s (so the sync thread is idle). **The in-process
+    CPU falls by at least a third (to at most 0.48 ms)**: I give this 55%. If it falls less, the cost is the reader thread (the
+    stdout pipe read) and the fix would be to hand the pipe to a file/shared buffer. This arm is a measurement only: a long sync
+    interval would break the clock alignment (the wall clock steps by about 3 ms in a few percent of runs), so the 100 ms default stays.
