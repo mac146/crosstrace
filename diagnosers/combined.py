@@ -104,7 +104,7 @@ def pooled(bds_by_span):
 
 
 def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, slow_api=False,
-             latent_baseline=False, run_level=False, source="joined"):
+             latent_baseline=False, run_level=False, source="joined", pool_entries=None):
     """source (Stage 14 adds "pooled_port" and "obi"): "joined" (default, each step's own kernel events), "pooled" (run-wide host-metric numbers for every step, no
     server wait) or "pooled_wait" (as pooled plus the run's maximum server wait: an upper bound on a metrics stack).
 
@@ -127,9 +127,12 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
 
     if source not in ("joined", "pooled", "pooled_wait", "pooled_port", "obi"):
         raise ValueError(source)
+    # pool_entries (Stage 14, concurrency): the HTTP entries of EVERY agent on the host. The pooled sources then pool over all of them,
+    # as shared host counters would; the diagnosed agent's own steps still come from `timeline`. Default: this timeline's own HTTP spans.
+    pe = {e.span["span_id"]: e for e in pool_entries} if pool_entries is not None else dict(http_entry)
     override = None          # span_id -> the evidence this arm is allowed to see for that HTTP span
     if source != "joined":
-        own = {sid: breakdown(e) for sid, e in http_entry.items()}
+        own = {sid: breakdown(e) for sid, e in pe.items()}
         if source in ("pooled", "pooled_wait"):
             pool = pooled(own)
             if source == "pooled_wait":
@@ -138,7 +141,7 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
         elif source == "pooled_port":
             # per-destination metrics: the same counters and the server wait, pooled over the spans that went to one server port
             groups = {}
-            for sid, e in http_entry.items():
+            for sid, e in pe.items():
                 groups.setdefault(e.span["attrs"].get("server.port"), {})[sid] = own[sid]
             override = {}
             for g in groups.values():

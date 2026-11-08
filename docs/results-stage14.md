@@ -43,3 +43,29 @@ The first smoke test showed retransmits on calls that only had a latency window.
 `v3` scored 0% on the mixed scenario. The harness now waits for the queue to drain before removing the window. The correlator was right to
 attach them (they belong to that connection); the fault injector was the cause. The same effect may have mattered in earlier runs that removed a
 qdisc while packets were in flight, but those faults were applied to the whole run, where the retransmits land after the last span.
+
+## Part 2: the same comparison under concurrency
+Harness: [eval/selective_conc.py](../eval/selective_conc.py) (`python -m eval.selective_conc --agents 1 8 32`). C agents (threads, one trace each)
+run the mixed scenario in lockstep against ONE API server (latency window for calls 1 and 3, slow answers for calls 2 and 4); truth for every
+agent is {net_latency, slow_api}. One collector; each agent diagnosed on its own spans; the host-wide arms pool over ALL agents' HTTP spans.
+Thresholds are calibrated at the same concurrency (12 healthy runs) and 6 more healthy runs per level measure false alarms.
+Predictions 6-8 (predictions-stage14.md, Part 2) all held.
+
+| agents at once | mixed runs (agent-runs) | v3 joined: both in top 2 | runs where every agent was right | pool / pool_port / obi | healthy false alarms (v3) | HTTP spans with kernel events | collector warnings |
+|---|---|---|---|---|---|---|---|
+| 1 (control) | 20 (20) | 100% [84, 100] | 20/20 | 0% / 0% / 0% | 0/6 | 104/104 | 0 |
+| 8 | 20 (160) | 100% [98, 100] | 20/20 | 0% / 0% / 0% | 0/48 | 832/832 | 0 |
+| 32 | 10 (320) | 100% [99, 100] | 10/10 | 0% / 0% / 0% | 0/192 | 2048/2048 | 0 |
+
+- **The join keeps its side of the result under concurrency**: 100% at 8 and at 32 simultaneous agents, with every HTTP span joined to
+  kernel events, no orphans and no lost events. Healthy thresholds rose with load (http_api 57 -> 71 -> 102 ms) and calibrating at the same
+  load kept healthy false alarms at 0.
+- **Concurrency did not widen the gap**, as predicted: the cheap baselines were already at 0% in this scenario, so 0% is also all they can show.
+  What this adds is evidence that the join does not degrade where host-wide counters get most mixed.
+- Not shown, and not claimed: any case where host-wide or per-destination metrics fail worse than 0%; agents with DIFFERENT faults at the same
+  moment (a netem window is per port, so the injector cannot give two agents different network faults on one server).
+
+## Limits specific to part 2
+- Lockstep threads in one process on loopback, one server; the 512-thread/16-process join checks (Stages 9 and 12) used a different, simpler workload.
+- Agents of one run share a server and a window, so agent-runs are not independent: the intervals are optimistic; the per-run column is the safer count.
+- `pool_entries` (host-wide pooling across agents) is exercised only by this integration run, not by a separate unit test.
