@@ -105,7 +105,7 @@ def pooled(bds_by_span):
 
 def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, slow_api=False,
              latent_baseline=False, run_level=False, source="joined"):
-    """source: "joined" (default, each step's own kernel events), "pooled" (run-wide host-metric numbers for every step, no
+    """source (Stage 14 adds "pooled_port" and "obi"): "joined" (default, each step's own kernel events), "pooled" (run-wide host-metric numbers for every step, no
     server wait) or "pooled_wait" (as pooled plus the run's maximum server wait: an upper bound on a metrics stack).
 
     run_level (v5, added AFTER the real-network faults run, results-stage8.md): judge the model connection by run-level
@@ -125,13 +125,30 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
         scores[cause] = scores.get(cause, 0.0) + amount
         evidence.setdefault(cause, []).append(why)
 
-    if source not in ("joined", "pooled", "pooled_wait"):
+    if source not in ("joined", "pooled", "pooled_wait", "pooled_port", "obi"):
         raise ValueError(source)
-    pool = None
+    override = None          # span_id -> the evidence this arm is allowed to see for that HTTP span
     if source != "joined":
-        pool = pooled({sid: breakdown(e) for sid, e in http_entry.items()})
-        if source == "pooled_wait":
-            pool["server_wait_ms"] = pool["_wait_if_generous"]
+        own = {sid: breakdown(e) for sid, e in http_entry.items()}
+        if source in ("pooled", "pooled_wait"):
+            pool = pooled(own)
+            if source == "pooled_wait":
+                pool["server_wait_ms"] = pool["_wait_if_generous"]
+            override = {sid: pool for sid in own}
+        elif source == "pooled_port":
+            # per-destination metrics: the same counters and the server wait, pooled over the spans that went to one server port
+            groups = {}
+            for sid, e in http_entry.items():
+                groups.setdefault(e.span["attrs"].get("server.port"), {})[sid] = own[sid]
+            override = {}
+            for g in groups.values():
+                p = pooled(g)
+                p["server_wait_ms"] = p["_wait_if_generous"]
+                override.update({sid: p for sid in g})
+        else:
+            # obi: an auto-instrumentation agent's information content: a per-request server duration, nothing about DNS/RTT/loss
+            override = {sid: {**b, "dns_ms": None, "connect_ms": None, "retransmits": 0, "srtt_max_ms": None}
+                        for sid, b in own.items()}
     run_findings = False
     if run_level:
         thr = kprofile.get("classes", {}).get("model", {})
@@ -151,7 +168,8 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
             continue
         step = f"{span['name']} took {dur_ms(span):.0f}ms ({excess:.0f}ms over threshold)"
         https = [http_entry[d["span_id"]] for d in descendants(spans, span) if d["span_id"] in http_entry]
-        bds = [({**pool, "span_ms": breakdown(h)["span_ms"]} if pool else breakdown(h)) for h in https]
+        bds = [({**override[h.span["span_id"]], "span_ms": breakdown(h)["span_ms"]} if override else breakdown(h))
+               for h in https]
         if key == "chat":
             if any(attr(d, "http.response.status_code") == 429 for d in descendants(spans, span)):
                 add("rate_limit", excess, step + ", HTTP 429 seen")

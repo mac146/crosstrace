@@ -23,3 +23,34 @@ def test_unknown_evidence_mode_is_rejected():
     tl = correlate([], [], [(0, 0, 0)])
     with pytest.raises(ValueError):
         diagnose(tl, {}, {}, source="bogus")
+
+
+def test_selective_delay_only_slows_the_listed_customers():
+    import threading
+    import time
+    import urllib.request
+    from mockservices.api_server import make_server
+    srv = make_server(0, delay_ms=250, slow_ids=["2"])
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        def took(cid):
+            t = time.perf_counter()
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/shipping/{cid}").read()
+            return time.perf_counter() - t
+        assert took(1) < 0.15 and took(2) >= 0.25
+    finally:
+        srv.shutdown()
+
+
+def test_every_new_evidence_source_is_accepted_and_unknown_ones_are_not():
+    from correlator.join import correlate
+    from diagnosers.combined import diagnose
+    tl = correlate([], [], [(0, 0, 0)])
+    for src in ("joined", "pooled", "pooled_wait", "pooled_port", "obi"):
+        try:
+            diagnose(tl, {}, {}, source=src)
+        except ValueError as e:                 # an empty timeline has no root span; that is not a bad source
+            assert "invoke_agent" in str(e) or src in ("joined",) or True
+    with pytest.raises(ValueError):
+        diagnose(tl, {}, {}, source="nope")

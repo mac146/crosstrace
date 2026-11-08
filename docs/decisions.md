@@ -219,3 +219,9 @@ Running log. Newest at the bottom. Each entry: decision, why.
 - Host-level pooled evidence (`diagnose(..., source="pooled")`) ties the joined method on single network faults but cannot name a slow
   server; with the run's maximum server wait added it matches the joined method on everything recorded. The README now says what carries the
   result (per-request kernel timing) and what the benchmark cannot show (when the per-span join itself is needed).
+
+## D41. The join's value was narrowed again, against per-destination metrics (Stage 14)
+- Per-destination pooled evidence ties the join unless two different problems hit the same destination in one run. Claim in README: the value
+  is kernel-level network evidence plus per-request server timing; the per-span join is needed for mixed-same-destination cases (and,
+  untested, for concurrency). The latency-window harness waits for the netem queue to drain before removal (a qdisc teardown otherwise creates
+  retransmits that look like loss).
