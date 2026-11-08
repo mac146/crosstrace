@@ -21,6 +21,18 @@ if [ -x "$BUILT" ]; then
 else
   echo "note: $BUILT not built yet (make -C collectors/ctrace); the compiled collector is not enabled"
 fi
+# Optional: the real OpenTelemetry eBPF Instrumentation (OBI) v1.0.0 for the Stage 15 comparison. Installed only if the extracted binary
+# is byte-identical to the one whose hash was recorded (release tarball checksum verified, signature NOT verified: no cosign).
+OBI_BUILT="$HOME/obi-dl/x/obi"
+OBI_SHA=b239d223f41c5bd4577bb0a040dbc2621cdd7911b1936e3f2a36971de1704462
+OBI_DEST=/usr/local/libexec/crosstrace/obi
+if [ -f "$OBI_BUILT" ] && [ "$(sha256sum "$OBI_BUILT" | cut -d' ' -f1)" = "$OBI_SHA" ]; then
+  sudo install -d -o root -g root -m 755 /usr/local/libexec/crosstrace
+  sudo install -o root -g root -m 755 "$OBI_BUILT" "$OBI_DEST"
+  RULE="$RULE, $OBI_DEST"
+else
+  echo "note: OBI not installed (missing or hash mismatch at $OBI_BUILT)"
+fi
 printf '%s\n' "$RULE" | sudo tee /etc/sudoers.d/crosstrace >/dev/null
 sudo chmod 440 /etc/sudoers.d/crosstrace
 sudo rm -f /etc/sudoers.d/crosstrace-tc   # superseded by the combined file
@@ -31,4 +43,7 @@ sudo -n bpftrace --version && echo "OK: passwordless bpftrace works"
 if [ -x "$DEST" ]; then
   rc=0; sudo -n "$DEST" --bad-flag 2>/dev/null || rc=$?   # usage error (status 2) proves it ran without a password
   [ "$rc" -eq 2 ] && echo "OK: passwordless ctrace works"
+fi
+if [ -x "$OBI_DEST" ]; then
+  if sudo -n "$OBI_DEST" --version >/dev/null 2>&1; then echo "OK: passwordless obi runs"; else echo "note: obi installed but --version did not succeed"; fi
 fi
