@@ -86,6 +86,9 @@ def run_config(procs, threads, tasks):
             time.sleep(0.5)                              # let the last events reach the collector
         spans = [s for r, _ in results for s in r]
         errors = [e for _, es in results for e in es]
+        error_kinds = {}
+        for e in errors:
+            error_kinds[e[:90]] = error_kinds.get(e[:90], 0) + 1
         env = {"api_port": svc.api_port, "llm_port": svc.llm_port, "dns_port": svc.dns_server[1]}
         tl = correlate(spans, k.events, k.clock_sync)
         problems = check(tl, env)
@@ -113,7 +116,7 @@ def run_config(procs, threads, tasks):
                 "events": len(k.events), "wrong_connection": wrong, "no_connection": missing,
                 "foreign_events_attached": foreign, "pinned_orphans": pinned_orphans, "matches": matches,
                 "problems": len(problems), "warnings": k.warnings, "sample_problems": problems[:3],
-                "clock_jump_ms": tl.clock_max_jump_ns / 1e6}
+                "clock_jump_ms": tl.clock_max_jump_ns / 1e6, "error_kinds": error_kinds}
 
 
 def main():
@@ -135,6 +138,8 @@ def main():
         if r["problems"] or r["warnings"]:
             print(f"        integrity problems: {r['problems']}; collector warnings: {r['warnings'][:2]}; "
                   f"sample: {r['sample_problems'][:1]}", flush=True)
+        if r["error_kinds"]:
+            print(f"        task errors by kind: {r['error_kinds']}", flush=True)
         print(f"        attached events by evidence: {r['matches']}; clock step during run: {r['clock_jump_ms']:.1f} ms",
               flush=True)
 

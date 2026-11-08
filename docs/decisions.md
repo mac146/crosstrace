@@ -166,3 +166,19 @@ Running log. Newest at the bottom. Each entry: decision, why.
   is untested and stated in the results. v4 is now the version to use on a real network; v3 stays for comparison.
 - A syntax error in an eval script reached a paid run once because no test imported it; tests/test_scripts_compile.py now
   compiles every module and script.
+
+## D29. Kernel probes added for real deployments: libc DNS, TCP sends (Stage 8)
+- `getaddrinfo` timing (uprobe on libc) replaces dependence on how my own resolver client sends packets; `tcp_sendmsg` gives
+  pid/tid-tagged sends, which attach reused keep-alive connections to the right span and give a client-side remote-server wait.
+  Both are opt-in per collector and on for real-model runs. A send must never be attached to another thread's span by the
+  port+time fallback (caught by a test).
+
+## D30. Real-network faults: scoped, self-removing, and only at the user's request (Stage 8)
+- `faultlab/real_path.py` touches only traffic to the model server's resolved IPs on 443 (egress of the default interface) and UDP
+  to the resolver on `lo`, behind a prio band that sends all other traffic elsewhere; refuses a dirty interface, always removes
+  the rule (finally, watchdog timer, atexit) and raises if the original qdisc is not restored. The guard first matched a substring
+  and refused a clean interface ("priomap"); it now matches the qdisc kind.
+
+## D31. Concurrency harness and the mock-server backlog (Stage 9)
+- The join was checked at up to 512 simultaneous threads against ground-truth ports. The first run's task errors were the mock
+  servers' listen backlog (5): raised to 256, confirmed by rerunning, and recorded as a test-server limit.

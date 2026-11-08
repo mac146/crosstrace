@@ -31,8 +31,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
 
+class Server(ThreadingHTTPServer):
+    # socketserver's default listen backlog is 5: with dozens of simultaneous clients the kernel resets the surplus
+    # connections ("Connection reset by peer"), which is a limit of this test server, not of the thing being measured.
+    request_queue_size = 256
+    daemon_threads = True
+
+
 def make_server(port, delay_ms=0):
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    srv = Server(("127.0.0.1", port), Handler)
     srv.delay_ms = delay_ms
     return srv
 

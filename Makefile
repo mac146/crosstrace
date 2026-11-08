@@ -72,6 +72,16 @@ reproduce-stage6:
 	rm -rf $(REPRO_DIR)-s6 && mkdir -p $(REPRO_DIR)-s6
 	( for t in eval-slowapi-a eval-slowapi-b eval-subtle eval-pairs eval-load eval-langgraph; do 	    CROSSTRACE_DATA=$(REPRO_DIR)-s6 $(MAKE) $$t || exit 1; done ) 2>&1 | tee $(REPRO_DIR)-s6/report.txt
 
+# --- Stage 8-9 ---
+# eval-real-faults: faults on the REAL network path to a real model (ROOT; touches eth0 and lo, see faultlab/real_path.py).
+#   Needs CROSSTRACE_ENV_FILE=<env file with OPENROUTER_API_KEY> and `make venv-real`; costs about a cent.
+# eval-concurrency: the join with up to 512 agent threads (ROOT, ~1 minute).
+.PHONY: eval-real-faults eval-concurrency
+eval-real-faults:
+	$(PYTHON) -m eval.real_faults --n 8 --cal 16 --variants base v3 v4
+eval-concurrency:
+	$(PYTHON) -m eval.concurrency --configs 1x1 1x8 1x32 4x8 8x8 8x16 8x32 16x16 16x32 --total 160
+
 # --- The whole experiment from an empty database, one command (ROOT, about 40 minutes, keep the machine idle). ---
 # Fault parameters are seeded and reproduce exactly; timings and therefore exact percentages vary a little from
 # run to run (see README, "Reproducibility"). The full report is also saved to $(REPRO_DIR)/report.txt.

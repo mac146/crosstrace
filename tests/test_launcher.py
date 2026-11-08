@@ -43,3 +43,14 @@ def test_services_give_up_after_the_attempt_limit(monkeypatch):
                 pass
     finally:
         blocker.close()
+
+
+def test_mock_servers_accept_many_simultaneous_clients():
+    """socketserver's default listen backlog of 5 reset connections under dozens of clients (Stage 9)."""
+    from mockservices import api_server, llm_server
+    for mod in (api_server, llm_server):
+        srv = mod.make_server(0)
+        try:
+            assert srv.request_queue_size >= 128
+        finally:
+            srv.server_close()

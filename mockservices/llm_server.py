@@ -71,8 +71,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"choices": [{"index": 0, "message": msg, "finish_reason": "stop"}]})
 
 
+class Server(ThreadingHTTPServer):
+    # socketserver's default listen backlog is 5: with dozens of simultaneous clients the kernel resets the surplus
+    # connections ("Connection reset by peer"), which is a limit of this test server, not of the thing being measured.
+    request_queue_size = 256
+    daemon_threads = True
+
+
 def make_server(port, delay_ms=0, rate_limit_first=0):
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    srv = Server(("127.0.0.1", port), Handler)
     srv.cfg = {"delay_ms": delay_ms, "rate_limit_first": rate_limit_first,
                "count": 0, "lock": threading.Lock()}
     return srv

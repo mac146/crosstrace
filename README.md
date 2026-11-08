@@ -42,7 +42,17 @@ to be calibrated on the real service. A fourth version (v4) that only reports ba
 they exceed what healthy runs show cut those false alarms from 69% to 6% on fresh healthy runs, at a cost that is not yet
 measured: it would stay silent about mild packet loss on that network ([docs/results-stage7.md](docs/results-stage7.md)).
 Where my predictions were wrong, the results document says so. **Not tested:**
-network faults on a real path, production load.
+production load.
+
+**Stage 8-9 (real network path, real DNS, scale).** Probes for real DNS lookups (libc) and for TCP sends now give kernel
+evidence on every model call, including reused connections, and the kernel measured faults injected on the real path to a real
+model (a 991 ms latency as a 1,060 ms connect; a 4.9 s DNS delay as 5.3 s). **The diagnosis did not keep up:** on a real model the
+calls vary by seconds and healthy kernel signals have heavy tails, so a 1 s network fault never crosses a step threshold (83% of
+such runs got no answer), and packet loss is not separable from the path's background retransmits by count
+([docs/results-stage8.md](docs/results-stage8.md); what might work better is written up, not built). The join itself stayed
+correct under load: 5,120 of 5,120 spans got exactly their own connection with up to 512 simultaneous agent threads and no
+lost kernel events ([docs/results-stage9.md](docs/results-stage9.md)); async agents on one shared thread and real production
+load remain untested.
 
 **How much to trust this**
 
