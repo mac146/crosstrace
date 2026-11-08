@@ -131,3 +131,24 @@ Running log. Newest at the bottom. Each entry: decision, why.
 - OTel in-process: about +7.5% latency and +63% main-thread CPU per run. eBPF adds about 4.5 ms/run of bpftrace CPU plus
   about 3.4 ms of helper-thread CPU. Options not tried: head sampling, a lighter span set, batching, moving JSON
   parsing out of the agent process.
+
+## D22. One shared OpenTelemetry provider is the default; per-run providers kept as `Tracing(shared=False)` (Stage 6)
+- Profiling showed creating a TracerProvider costs ~0.3 ms per run. The benchmark could not resolve a gain from sharing it
+  (+0.6% to +3.5% shared vs -0.3% to +2.3% per-run, intervals overlap), so this is a tidiness change, not an optimisation.
+
+## D23. In-kernel port filtering and ACK-sample dropping, on in recorded runs (Stage 6)
+- bpftrace drops events for other ports, and RTT samples on pure ACKs, before printing (about half the events). Join
+  integrity was rechecked (24/24). It did NOT reduce overhead (see results-stage6.md section 7); kept because it shrinks stored data.
+
+## D24. The slow_db lock starts at the first query (Stage 6)
+- Starting it with the run let it expire during earlier slow steps in two-fault runs, so slow_db never happened. Equivalent for a
+  single fault to within a few ms, but Stage 1-5 slow_db runs used the old behaviour and were not rerun.
+
+## D25. v3 frozen before the later Stage 6 suites; predictions committed first
+- v3 adds one rule, written after the first slowapi set. Predictions for each later suite were committed before that suite
+  ran, and v3 was not changed afterwards. Known v3 weakness left in place: the 429 hedge (results-stage6.md section 3).
+
+## D26. Secrets (Stage 6)
+- Keys live in a git-ignored `.env` (or a mode-600 file); code reads them in-process and scrubs them from errors before they
+  reach spans or the database. A key is deleted from disk after use, and the user is asked to revoke it. Free models of the
+  OpenCode API refuse API use; the restriction was respected, not bypassed.

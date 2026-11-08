@@ -31,6 +31,13 @@ DNS delay 804 ms vs 805.1 ms, connect time 400 ms vs 400.3 ms for a 200 ms-per-d
 Over 8 fault types and 240 runs per set, no diagnoser ever blamed a healthy component (0/240, upper 95% bound 2%).
 The four non-network faults and the healthy runs are 100% for both diagnosers: spans already suffice there.
 
+**Harder tests (Stage 6, [docs/results-stage6.md](docs/results-stage6.md)).** A slow API *server* with a healthy network:
+the Stage 4 diagnoser blamed the network every time (0% right); after one added rule it was right in 100% of 30 fresh-seed
+runs. Subtle 20-100 ms faults, two faults at once (90-100% on most pairs; one weakness found, not fixed), a machine with all
+cores busy, and a third-party agent framework (LangGraph, 96.7-100% on the same faults against the mock model) all kept the
+advantage. Where my predictions were wrong, the results document says so. **Not tested: a real model and the real
+internet** (the API key available had no credit), real network faults, production load.
+
 **How much to trust this**
 
 * The network gain is close to built in by the design of the experiment: the baseline cannot separate those causes
@@ -40,9 +47,10 @@ The four non-network faults and the healthy runs are 100% for both diagnosers: s
   sample). It was judged on set 2, which was recorded afterwards. Details: [docs/results-stage4.md](docs/results-stage4.md).
 * `packet_loss` tops out at 90%: in 3 of 30 runs per set the loss never hit a packet that mattered, so there is nothing
   to observe. The diagnoser reaches that ceiling.
-* **Overhead target (under 5%) not met.** In-process OpenTelemetry alone adds +7.5% latency [+4.1, +11.3] and ~4 ms of
-  CPU to a 63 ms run; the eBPF collector adds no resolvable latency on top but ~8 ms more CPU per run (~20% of one
-  core in total with eBPF). No mitigation (sampling, batching) was tried.
+* **Overhead: latency is near the 5% target, CPU is not.** Across three sessions OpenTelemetry alone added +0.6% to +3.5%
+  latency (one earlier session read +7.5%) and about 1.3 ms of CPU per 60 ms run; adding the eBPF collector gives
+  +2.3% to +5.2% latency and roughly 3 ms of bpftrace CPU per run. A shared provider and in-kernel filtering did not help.
+  The spread between sessions is larger than within one, so treat any single number as a range.
 * Everything ran on loopback, with mock model and API servers, plain HTTP, one injected fault at a time, and faults
   I chose (large, hundreds of ms). Real networks, TLS, concurrent faults and subtle degradation are untested.
 
@@ -106,7 +114,7 @@ git clone <this repo> && cd crosstrace
 ./scripts/00_feasibility.sh      # ROOT: checks eBPF and netem work on this kernel (briefly touches the loopback qdisc)
 ./scripts/setup_sudoers.sh       # ROOT, once: passwordless sudo for tc and bpftrace. READ THE WARNING BELOW
 make venv                        # pinned dependencies (requirements-dev.txt)
-make test                        # 77 tests; the one live eBPF test is skipped if bpftrace is not usable
+make test                        # 119 tests; the one live eBPF test is skipped if bpftrace is not usable
 make reproduce                   # ROOT, ~40 min, keep the machine idle: both evaluation sets + overhead
 ```
 
@@ -134,15 +142,19 @@ agent/        target agent, tools, OTel tracing, DNS client      collectors/   b
 mockservices/ mock LLM, API and DNS servers                      correlator/   clock alignment, join, integrity checks, renderer
 faultlab/     fault catalog, tc netem controller, run harness    diagnosers/   baseline, combined, healthy-profile thresholds
 eval/         metrics, evaluation runners, overhead benchmark    scripts/      feasibility check, sudoers setup, healthy demo
-tests/        77 tests (join, diagnosers, metrics, live eBPF)    docs/         decisions.md (D1-D21), results-stage1..4.md
+tests/        119 tests (join, diagnosers, metrics, live eBPF)   docs/         decisions.md (D1-D26), results-stage1..4,6.md
 ```
 
 `docs/decisions.md` records every design decision and why, including the ones that were changed after results came in.
+`docs/predictions-stage6*.md` were committed before the Stage 6 runs, so each prediction can be checked against the result.
+
+Optional pieces: `pip install -r requirements-real.txt` adds the LangGraph agent and the real-model adapters. Their
+API keys go in a git-ignored `.env` (copy `.env.example`); never commit it, and revoke any key once you have finished with it.
 
 ## Not covered (out of scope or untested)
 
-GPU and inference-server internals, multi-agent protocols, TLS (kernel sees connections, not contents; plain HTTP
-here), faults outside the catalog (slow API server, congestion, flaky resolvers, several faults at once), real model
+GPU and inference-server internals, multi-agent protocols, TLS end to end (the kernel sees connections, not contents; the
+local runs use plain HTTP and a real TLS connection was only glimpsed), faults outside the catalog (slow API server, congestion, flaky resolvers, several faults at once), real model
 providers, non-loopback networks, IPv6, libc resolvers (the agent does its own DNS lookups so the probe can see them),
 and any mitigation of the tracing overhead.
 
