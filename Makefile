@@ -78,7 +78,7 @@ reproduce-stage6:
 # eval-concurrency: the join with up to 512 agent threads (ROOT, ~1 minute).
 .PHONY: eval-real-faults eval-concurrency
 eval-real-faults:
-	$(PYTHON) -m eval.real_faults --n 8 --cal 16 --variants base v3 v4
+	$(PYTHON) -m eval.real_faults --n 10 --cal 16 --cal-split realcal3 --cal-extra realcal2 --split rf_b --seed0 12000 --variants base v3 v4 v5
 eval-concurrency:
 	$(PYTHON) -m eval.concurrency --configs 1x1 1x8 1x32 4x8 8x8 8x16 8x32 16x16 16x32 --total 160
 

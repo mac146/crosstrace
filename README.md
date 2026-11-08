@@ -49,7 +49,11 @@ evidence on every model call, including reused connections, and the kernel measu
 model (a 991 ms latency as a 1,060 ms connect; a 4.9 s DNS delay as 5.3 s). **The diagnosis did not keep up:** on a real model the
 calls vary by seconds and healthy kernel signals have heavy tails, so a 1 s network fault never crosses a step threshold (83% of
 such runs got no answer), and packet loss is not separable from the path's background retransmits by count
-([docs/results-stage8.md](docs/results-stage8.md); what might work better is written up, not built). The join itself stayed
+([docs/results-stage8.md](docs/results-stage8.md)). A fifth version (v5: per-class thresholds and run-level medians instead of
+single samples) then found the faults on fresh real-network runs: DNS delay 10/10 and latency 9/10 (spans-only: 0/10), with 0/10
+false alarms on healthy runs and no change at all on 870 mock evaluations; packet loss stays at 70% and the detection floor is
+set by the path's own noise, about 1 s of latency and 2.3 s of DNS on that network, from 10 runs per group on one path
+([docs/results-stage10.md](docs/results-stage10.md)). The join itself stayed
 correct under load: 5,120 of 5,120 spans got exactly their own connection with up to 512 simultaneous agent threads and no
 lost kernel events ([docs/results-stage9.md](docs/results-stage9.md)); async agents on one shared thread and real production
 load remain untested.

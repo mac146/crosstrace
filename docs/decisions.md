@@ -182,3 +182,9 @@ Running log. Newest at the bottom. Each entry: decision, why.
 ## D31. Concurrency harness and the mock-server backlog (Stage 9)
 - The join was checked at up to 512 simultaneous threads against ground-truth ports. The first run's task errors were the mock
   servers' listen backlog (5): raised to 256, confirmed by rerunning, and recorded as a test-server limit.
+
+## D32. v5: run-level evidence per span class (Stage 10)
+- Designed from the Stage 8 real-path data (heavy healthy tails; persistent faults vs sporadic spikes), judged on fresh seeds
+  (rf_b) and a 870-evaluation mock regression (identical to v4). The lower median (not the median) makes "persistent" mean more
+  than half the calls. v5 is the version to use on a real network; its thresholds must be rebuilt from healthy runs on the
+  deployment path, and its detection floor is whatever that path's own noise allows (about 1 s latency and 2.3 s DNS here).

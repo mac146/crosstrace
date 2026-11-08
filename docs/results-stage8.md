@@ -60,7 +60,8 @@ alarms 0% (observed 25%: two healthy runs had a slow model call), 9 (no run time
 * **Thresholds per span class** (a remote model call's lookup is ~200 ms, the local API tool's ~1 ms) and from far more than 16
   healthy runs; heavy-tailed signals need a robust statistic, not p99 of a handful.
 * Packet loss is likely undetectable by retransmit count alone on a path with this background rate.
-These would be a new diagnoser version tested on fresh seeds; none of it is claimed here.
+These would be a new diagnoser version tested on fresh seeds; none of it is claimed here. (Built and tested afterwards as v5:
+see `results-stage10.md`.)
 
 ## Mistakes found on the way (all fixed)
 The first real fault run refused to start: my guard against stacking qdiscs looked for the text "prio", which the normal
