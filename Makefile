@@ -57,6 +57,18 @@ venv-real:
 eval-real:
 	$(PYTHON) -m eval.real_model --cal 12 --n 8 --variants base v3
 
+# --- Stage 6 extras ---
+# eval-load: subtle faults with all cores busy (needs ~15 min). eval-langgraph: a third-party agent framework (LangGraph)
+# against the local mock model, ~15 min, needs `make venv-real`. reproduce-stage6 runs every Stage 6 suite (~2 hours).
+.PHONY: eval-load eval-langgraph reproduce-stage6
+eval-load:
+	$(PYTHON) -m eval.run_hard --suite subtle --split sub_load --seed0 6000 --variants base v3 --load 10 --cal-split hardcal_load
+eval-langgraph:
+	$(PYTHON) -m eval.run_hard --suite slowapi --split lg_a --seed0 9000 --variants base v3 --llm-kind langgraph-mock --cal-split lgcal
+reproduce-stage6:
+	rm -rf $(REPRO_DIR)-s6 && mkdir -p $(REPRO_DIR)-s6
+	( for t in eval-slowapi-a eval-slowapi-b eval-subtle eval-pairs eval-load eval-langgraph; do 	    CROSSTRACE_DATA=$(REPRO_DIR)-s6 $(MAKE) $$t || exit 1; done ) 2>&1 | tee $(REPRO_DIR)-s6/report.txt
+
 # --- The whole experiment from an empty database, one command (ROOT, about 40 minutes, keep the machine idle). ---
 # Fault parameters are seeded and reproduce exactly; timings and therefore exact percentages vary a little from
 # run to run (see README, "Reproducibility"). The full report is also saved to $(REPRO_DIR)/report.txt.
