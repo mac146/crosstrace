@@ -28,7 +28,7 @@ from collectors.ebpf import available as bpf_available
 from correlator.join import _is_http, breakdown
 from correlator.load import load_timeline
 from diagnosers import baseline, combined
-from diagnosers.profile import build_kernel_profile, build_profile
+from diagnosers.profile import build_kernel_profile, build_profile, kernel_profile_from_timelines
 from eval.metrics import aggregate, aggregate_multi, score_multi, score_run
 from eval.run_full import pct
 from faultlab.faults import SUBTLE_FAULTS, TWO_FAULT_PAIRS, truth_faults
@@ -43,7 +43,7 @@ SUITES = {
     "subtle": {"faults": ["none"] + SUBTLE_FAULTS, "magnitude": "subtle", "rules": ["coarse", "tight"]},
     "pairs": {"faults": TWO_FAULT_PAIRS, "magnitude": "normal", "rules": ["coarse"]},
 }
-LABEL = {"base": "base", "v2": "v2", "v3": "v3", "v4": "v4"}
+LABEL = {"base": "base", "v2": "v2", "v3": "v3", "v4": "v4", "v5": "v5"}
 
 
 @contextlib.contextmanager
@@ -78,13 +78,8 @@ def collect(con, suite, split, seed0, n, n_none, n_cal, force, cal_split=CAL_SPL
 def calibrate(con, rule, cal_split=CAL_SPLIT):
     runs = store.list_runs(con, cal_split, "none")
     profile = build_profile([store.load_spans(con, r["run_id"]) for r in runs], rule)
-    bds, run_retx = [], []
-    for r in runs:
-        tl, _ = load_timeline(con, r["run_id"])
-        these = [breakdown(e) for e in tl.entries if _is_http(e.span)]
-        bds += these
-        run_retx.append(sum(b["retransmits"] for b in these))
-    return profile, build_kernel_profile(bds, rule, run_retx)
+    timelines = [load_timeline(con, r["run_id"])[0] for r in runs]
+    return profile, kernel_profile_from_timelines(timelines, rule)
 
 
 def diagnose(variant, spans, tl, profile, kprofile, seed):
@@ -94,6 +89,9 @@ def diagnose(variant, spans, tl, profile, kprofile, seed):
         out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True)
     elif variant == "v3":
         out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True, slow_api=True)
+    elif variant == "v5":
+        out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True, slow_api=True,
+                                latent_baseline=True, run_level=True)
     elif variant == "v4":
         out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True, slow_api=True,
                                 latent_baseline=True)
@@ -124,7 +122,8 @@ def report(suite, rule, variants, profile, kprofile, results):
     multi = suite == "pairs"
     print(f"\n=== suite {suite}, threshold rule '{rule}' ===")
     print("step thresholds (ms): " + ", ".join(f"{k}={v:.0f}" for k, v in sorted(profile.items())))
-    print("kernel thresholds (ms): " + ", ".join(f"{k}={v:.0f}" for k, v in sorted(kprofile.items())))
+    print("kernel thresholds (ms): " + ", ".join(f"{k}={v:.0f}" for k, v in sorted(kprofile.items())
+                                                  if isinstance(v, (int, float))))
     head = "top-1 in truth      both in top-2      false-attr         said none" if multi else \
            "top-1               top-3              false-attr         said none"
     print(f"\n{'fault':<24}{'n':>3}  {'':5}{head}")

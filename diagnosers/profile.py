@@ -13,6 +13,8 @@ Threshold rules (both fixed before any results were looked at):
 """
 import statistics
 
+from correlator.join import _is_http, breakdown
+
 from diagnosers.common import dur_ms, operations, root_span
 
 MARGIN_MS = 50.0  # kept for callers/tests that import it: the coarse rule's margin
@@ -62,4 +64,61 @@ def build_kernel_profile(breakdowns, rule="coarse", run_retx=None):
            "server_wait_ms": _threshold(wait, rule)}
     if run_retx:
         out["retx_per_run"] = _p99(run_retx)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# v5 (Stage 10): thresholds per span class and run-level robust statistics. Designed after the real-path run
+# (results-stage8.md): a remote model call and the local API tool have very different healthy lookup/connect/RTT, and on a
+# real network single samples have heavy tails while a real fault persists across a run's calls.
+
+MIN_CALLS = 3          # a run-level median needs at least this many calls of a class
+MIN_HEALTHY_RUNS = 5   # fewer healthy runs than this: no run-level threshold is built
+
+
+def http_by_class(timeline):
+    """HTTP spans of a joined run, split by what asked for them: 'model' (child of a chat step) or 'tool'."""
+    by_id = {e.span["span_id"]: e for e in timeline.entries}
+    out = {"model": [], "tool": []}
+    for e in timeline.entries:
+        if _is_http(e.span):
+            parent = by_id.get(e.span["parent_id"])
+            op = parent.span["attrs"].get("gen_ai.operation.name") if parent else None
+            out["model" if op == "chat" else "tool"].append(e)
+    return out
+
+
+def run_summary(entries):
+    """Run-level evidence of one class: the lookup (one per fresh connection, so the max), and the MEDIAN over the run's calls
+    of each call's largest smoothed RTT (a persistent delay lifts every call; sporadic spikes lift one). It is the LOWER
+    median, so with an even number of calls an unaffected half keeps it low: "persistent" means MORE than half the calls."""
+    bds = [breakdown(e) for e in entries]
+    dns = [b["dns_ms"] for b in bds if b["dns_ms"] is not None]
+    srtt = [b["srtt_max_ms"] for b in bds if b["srtt_max_ms"] is not None]
+    return {"n": len(bds), "dns_ms": max(dns) if dns else None,
+            "srtt_med_ms": statistics.median_low(srtt) if len(srtt) >= MIN_CALLS else None,
+            "retx": sum(b["retransmits"] for b in bds)}
+
+
+def kernel_profile_from_timelines(timelines, rule="coarse"):
+    """The kernel thresholds of v1-v4 (pooled over every HTTP span, exactly as before) plus, under "classes", run-level
+    thresholds for model calls: {"classes": {"model": {"dns_ms": .., "srtt_med_ms": ..}}}."""
+    bds, run_retx, dns, srtt_med = [], [], [], []
+    for tl in timelines:
+        classes = http_by_class(tl)
+        these = [breakdown(e) for es in classes.values() for e in es]
+        bds += these
+        run_retx.append(sum(b["retransmits"] for b in these))
+        s = run_summary(classes["model"])
+        if s["dns_ms"] is not None:
+            dns.append(s["dns_ms"])
+        if s["srtt_med_ms"] is not None:
+            srtt_med.append(s["srtt_med_ms"])
+    out = build_kernel_profile(bds, rule, run_retx)
+    model = {}
+    if len(dns) >= MIN_HEALTHY_RUNS:
+        model["dns_ms"] = _threshold(dns, rule)
+    if len(srtt_med) >= MIN_HEALTHY_RUNS:
+        model["srtt_med_ms"] = _threshold(srtt_med, rule)
+    out["classes"] = {"model": model}
     return out

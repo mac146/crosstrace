@@ -31,6 +31,7 @@ import random
 
 from correlator.join import _is_http, breakdown
 from diagnosers.common import Cause, attr, descendants, dur_ms, operations
+from diagnosers.profile import http_by_class, run_summary
 
 NETWORK = ("dns_delay", "net_latency", "packet_loss")
 LATENT_LOSS_SCORE = 0.001
@@ -88,8 +89,14 @@ def attribute_http(excess, b, kp, loss_explains_rtt=False, slow_api=False):
 
 
 def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, slow_api=False,
-             latent_baseline=False):
-    """latent_baseline (v4, added AFTER the real-model run showed 5 of 8 healthy runs with 1-4 retransmits): the latent
+             latent_baseline=False, run_level=False):
+    """run_level (v5, added AFTER the real-network faults run, results-stage8.md): judge the model connection by run-level
+    evidence against per-class healthy thresholds, even when no step crossed its (noisy) duration threshold:
+      * the run's DNS lookup above its healthy threshold            -> dns_delay (score = lookup ms)
+      * the MEDIAN over the run's model calls of the smoothed RTT above its healthy threshold -> net_latency
+        (score = median x calls); a persistent delay lifts every call, a sporadic spike lifts one and is ignored.
+    A slow model call these findings explain is not also blamed on slow_model. Packet loss keeps the v4 rule.
+    latent_baseline (v4, added AFTER the real-model run showed 5 of 8 healthy runs with 1-4 retransmits): the latent
     loss rule fires only when the run's retransmits exceed kprofile["retx_per_run"], the most that healthy runs on the
     same network show. On a healthy loopback that is 0, so behaviour there is unchanged."""
     spans = [e.span for e in timeline.entries]
@@ -99,6 +106,19 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
     def add(cause, amount, why):
         scores[cause] = scores.get(cause, 0.0) + amount
         evidence.setdefault(cause, []).append(why)
+
+    run_findings = False
+    if run_level:
+        thr = kprofile.get("classes", {}).get("model", {})
+        s = run_summary(http_by_class(timeline)["model"])
+        if s["dns_ms"] is not None and "dns_ms" in thr and s["dns_ms"] > thr["dns_ms"]:
+            add("dns_delay", s["dns_ms"], f"DNS lookup on the model connection took {s['dns_ms']:.0f}ms "
+                f"(healthy threshold {thr['dns_ms']:.0f}ms)")
+            run_findings = True
+        if s["srtt_med_ms"] is not None and "srtt_med_ms" in thr and s["srtt_med_ms"] > thr["srtt_med_ms"]:
+            add("net_latency", s["srtt_med_ms"] * s["n"], f"median smoothed RTT over {s['n']} model calls was "
+                f"{s['srtt_med_ms']:.0f}ms (healthy threshold {thr['srtt_med_ms']:.0f}ms): the delay is persistent")
+            run_findings = True
 
     for key, span in operations(spans):
         excess = dur_ms(span) - profile[key]
@@ -112,6 +132,8 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
                 add("rate_limit", excess, step + ", HTTP 429 seen")
                 add("slow_model", 0.5 * excess, step + " (retries can look like a slow model)")
                 continue
+            if run_findings:
+                continue   # v5: the run-level network evidence already explains this slow model call
             waits = [b["server_wait_ms"] for b in bds if b["server_wait_ms"] is not None]
             net = any(b["retransmits"] >= 1 or (b["srtt_max_ms"] or 0) > kprofile["srtt_ms"] for b in bds)
             if waits and max(waits) > kprofile["server_wait_ms"]:

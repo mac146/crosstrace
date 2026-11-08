@@ -21,7 +21,7 @@ from collectors import store
 from collectors.ebpf import available as bpf_available
 from correlator.join import _is_http, breakdown
 from correlator.load import load_timeline
-from diagnosers.profile import build_kernel_profile, build_profile
+from diagnosers.profile import build_kernel_profile, build_profile, kernel_profile_from_timelines
 from eval.metrics import aggregate, score_run
 from eval.run_full import pct
 from eval.run_hard import diagnose
@@ -45,17 +45,12 @@ def collect(con, n, n_cal, force, llm_kind="anthropic"):
 
 
 def calibrate(con, split, rule="coarse"):
-    runs = store.list_runs(con, split, "none")
+    runs = [r for part in split.split(",") for r in store.list_runs(con, part, "none")]   # "a,b": several healthy splits
     if not runs:
         return None
     profile = build_profile([store.load_spans(con, r["run_id"]) for r in runs], rule)
-    bds, run_retx = [], []
-    for r in runs:
-        tl, _ = load_timeline(con, r["run_id"])
-        these = [breakdown(e) for e in tl.entries if _is_http(e.span)]
-        bds += these
-        run_retx.append(sum(b["retransmits"] for b in these))
-    return profile, build_kernel_profile(bds, rule, run_retx)
+    timelines = [load_timeline(con, r["run_id"])[0] for r in runs]
+    return profile, kernel_profile_from_timelines(timelines, rule)
 
 
 def kernel_visibility(con):
@@ -130,7 +125,7 @@ def main():
     ap.add_argument("--seed0", type=int, default=None, help="first evaluation seed (default 8000)")
     ap.add_argument("--faults", nargs="+", default=None, choices=FAULTS,
                     help="restrict to these groups (default: none slow_tool slow_db)")
-    ap.add_argument("--variants", nargs="+", default=["base", "v2"], choices=["base", "v2", "v3", "v4"])
+    ap.add_argument("--variants", nargs="+", default=["base", "v2"], choices=["base", "v2", "v3", "v4", "v5"])
     ap.add_argument("--db", default=None)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--no-record", action="store_true")

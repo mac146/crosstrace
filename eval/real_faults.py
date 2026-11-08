@@ -86,7 +86,10 @@ def fmt(x, nd=0):
 
 def report(a, results, profile, kprofile):
     print("\nstep thresholds (ms): " + ", ".join(f"{k}={v:.0f}" for k, v in sorted(profile.items())))
-    print("kernel thresholds: " + ", ".join(f"{k}={v:.0f}" for k, v in sorted(kprofile.items())))
+    print("kernel thresholds: " + ", ".join(f"{k}={v:.0f}" for k, v in sorted(kprofile.items())
+                                              if isinstance(v, (int, float))))
+    print("model-call run-level thresholds (v5): " + ", ".join(
+        f"{k}={v:.0f}" for k, v in sorted(kprofile.get("classes", {}).get("model", {}).items())))
     print(f"\n{'fault':<12}{'n':>3}  {'':5}{'top-1':<19}{'false-attr':<19}{'said none':>9}")
     for fault, (rows, excluded) in results.items():
         for v in a.variants:
@@ -122,10 +125,11 @@ def main():
     ap.add_argument("--n", type=int, default=8)
     ap.add_argument("--cal", type=int, default=16, help="healthy runs for calibration (new probes, so a new split)")
     ap.add_argument("--cal-split", default="realcal2")
+    ap.add_argument("--cal-extra", default="", help="comma-separated already-recorded healthy splits added to calibration")
     ap.add_argument("--split", default="rf_a")
     ap.add_argument("--seed0", type=int, default=11_000)
     ap.add_argument("--faults", nargs="+", default=GROUPS, choices=GROUPS)
-    ap.add_argument("--variants", nargs="+", default=["base", "v3", "v4"], choices=["base", "v2", "v3", "v4"])
+    ap.add_argument("--variants", nargs="+", default=["base", "v3", "v4"], choices=["base", "v2", "v3", "v4", "v5"])
     ap.add_argument("--rule", default="coarse", choices=["coarse", "tight"])
     ap.add_argument("--price-in", type=float, default=0.034)
     ap.add_argument("--price-out", type=float, default=0.083)
@@ -146,7 +150,7 @@ def main():
         cost = TOTAL["input_tokens"] * a.price_in / 1e6 + TOTAL["output_tokens"] * a.price_out / 1e6
         print(f"\nAPI use: {TOTAL['calls']} calls, {TOTAL['input_tokens']} input + {TOTAL['output_tokens']} output tokens, "
               f"about ${cost:.4f}")
-    cal = calibrate(con, a.cal_split, a.rule)
+    cal = calibrate(con, ",".join([a.cal_split] + [x for x in a.cal_extra.split(",") if x]), a.rule)
     if cal is None:
         sys.exit(f"no calibration runs in split {a.cal_split}")
     profile, kprofile = cal
