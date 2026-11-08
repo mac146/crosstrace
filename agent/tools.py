@@ -20,16 +20,19 @@ def seed_db(path):
 
 
 class Tools:
-    def __init__(self, db_path, api_url, dns_server, tracing, slow_extra_ms=0):
+    def __init__(self, db_path, api_url, dns_server, tracing, slow_extra_ms=0, db_hook=None):
         self.db_path = db_path
         self.api_url = api_url
         self.dns_server = dns_server
         self.tracing = tracing
         self.slow_extra_ms = slow_extra_ms  # slow_tool fault hook
+        self.db_hook = db_hook              # slow_db fault hook: called right before the first query connects
 
     def db_query(self, sql):
         attrs = {"db.system.name": "sqlite", "db.query.text": sql}
         with self.tracing.span("SELECT orders", attrs, client=True):
+            if self.db_hook:
+                self.db_hook()
             con = sqlite3.connect(self.db_path, timeout=10)  # waits on a locked db
             try:
                 return json.dumps(con.execute(sql).fetchall())

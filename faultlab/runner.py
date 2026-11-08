@@ -27,20 +27,30 @@ class DbLock:
         self._released = threading.Event()
 
     def __enter__(self):
+        # The lock is taken lazily by arm(), which the agent's db_query calls right before it connects. Taking it at
+        # run start (the Stage 1-5 behaviour) let it expire during earlier slow steps (e.g. 429 backoff) so slow_db
+        # never happened in two-fault runs. For a single slow_db fault the two are equivalent to within a few ms.
+        self._timer = None
+        self.con = None
+        return self
+
+    def arm(self):
+        if self.con is not None:
+            return                      # already armed: later queries are not delayed again
         self.con = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
         self.con.execute("BEGIN EXCLUSIVE")
         self._timer = threading.Timer(self.hold_ms / 1000, self._release)
         self._timer.start()
-        return self
 
     def _release(self):
-        if not self._released.is_set():
+        if self.con is not None and not self._released.is_set():
             self._released.set()
             self.con.execute("ROLLBACK")
             self.con.close()
 
     def __exit__(self, *exc):
-        self._timer.cancel()
+        if self._timer is not None:
+            self._timer.cancel()
         self._release()
 
 
@@ -66,15 +76,16 @@ def run_one(fault, seed, con, split="eval", kernel=False, magnitude="normal", ll
             collector = stack.enter_context(KernelCollector(
                 dns_ports=[svc.dns_server[1]], reduce_rtt=True,
                 ports=[svc.api_port, 443 if llm_kind == "anthropic" else svc.llm_port]))
+        db_hook = None
         if plan.db_lock_ms:
-            stack.enter_context(DbLock(db, plan.db_lock_ms))
+            db_hook = stack.enter_context(DbLock(db, plan.db_lock_ms)).arm
         tracing = Tracing()
         if llm_kind == "anthropic":
             from agent.anthropic_llm import AnthropicLLM   # optional dependency, imported only when asked for
             llm = AnthropicLLM(tracing)
         else:
             llm = LLMClient(svc.llm_url, tracing)
-        tools = Tools(db, svc.api_url, svc.dns_server, tracing, plan.slow_extra_ms)
+        tools = Tools(db, svc.api_url, svc.dns_server, tracing, plan.slow_extra_ms, db_hook=db_hook)
         t_start = time.time_ns()
         try:
             run_agent(TASK, llm, tools, tracing)

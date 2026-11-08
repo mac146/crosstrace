@@ -18,7 +18,9 @@ slowapi suite showed v2 cannot name a slow server). The baseline always gets the
 REQUIRES passwordless sudo bpftrace and tc (scripts/setup_sudoers.sh).
 """
 import argparse
+import contextlib
 import json
+import subprocess
 import sys
 
 from collectors import store
@@ -44,9 +46,23 @@ SUITES = {
 LABEL = {"base": "base", "v2": "v2", "v3": "v3"}
 
 
-def collect(con, suite, split, seed0, n, n_none, n_cal, force):
+@contextlib.contextmanager
+def cpu_load(n):
+    """n busy-loop processes for the duration of the block (n=0: nothing). Used to test how thresholds hold up when
+    the machine is not idle; the load competes with the agent, the mock services and the collector."""
+    procs = [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(n)]
+    try:
+        yield
+    finally:
+        for p in procs:
+            p.kill()
+        for p in procs:
+            p.wait()
+
+
+def collect(con, suite, split, seed0, n, n_none, n_cal, force, cal_split=CAL_SPLIT):
     cfg = SUITES[suite]
-    todo = [(CAL_SPLIT, "none", CAL_SEED0 + i, "normal") for i in range(n_cal)]
+    todo = [(cal_split, "none", CAL_SEED0 + i, "normal") for i in range(n_cal)]
     for f in cfg["faults"]:
         mag = "normal" if f == "none" else cfg["magnitude"]
         todo += [(split, f, seed0 + i, mag) for i in range(n_none if f == "none" else n)]
@@ -59,8 +75,8 @@ def collect(con, suite, split, seed0, n, n_none, n_cal, force):
             print(f"  {k}/{len(todo)} runs", file=sys.stderr, flush=True)
 
 
-def calibrate(con, rule):
-    runs = store.list_runs(con, CAL_SPLIT, "none")
+def calibrate(con, rule, cal_split=CAL_SPLIT):
+    runs = store.list_runs(con, cal_split, "none")
     profile = build_profile([store.load_spans(con, r["run_id"]) for r in runs], rule)
     bds = []
     for r in runs:
@@ -81,8 +97,8 @@ def diagnose(variant, spans, tl, profile, kprofile, seed):
     return [c.cause for c in out]
 
 
-def evaluate(con, suite, split, rule, variants):
-    profile, kprofile = calibrate(con, rule)
+def evaluate(con, suite, split, rule, variants, cal_split=CAL_SPLIT):
+    profile, kprofile = calibrate(con, rule, cal_split)
     out = {}
     for fault in SUITES[suite]["faults"]:
         rows = []
@@ -148,6 +164,10 @@ def main():
     ap.add_argument("--n", type=int, default=30)
     ap.add_argument("--n-none", type=int, default=None, help="healthy runs (default: 60 for subtle, else n)")
     ap.add_argument("--cal", type=int, default=60)
+    ap.add_argument("--load", type=int, default=0, help="busy-loop processes running while RECORDING (CPU load)")
+    ap.add_argument("--cal-split", default=CAL_SPLIT,
+                    help="healthy calibration split to record into / calibrate from (e.g. hardcal_load)")
+    ap.add_argument("--only", nargs="+", default=None, help="restrict to these faults of the suite")
     ap.add_argument("--variants", nargs="+", default=["base", "v2"], choices=list(LABEL))
     ap.add_argument("--db", default=None)
     ap.add_argument("--force", action="store_true")
@@ -155,14 +175,20 @@ def main():
     ap.add_argument("--json", default=None)
     a = ap.parse_args()
     n_none = a.n_none or (60 if a.suite == "subtle" else a.n)
+    if a.only:
+        bad = set(a.only) - set(SUITES[a.suite]["faults"])
+        if bad:
+            sys.exit(f"not in suite {a.suite}: {sorted(bad)}")
+        SUITES[a.suite]["faults"] = a.only
     con = store.connect(a.db)
     if not a.no_record:
         if not bpf_available() or not tc_available():
             sys.exit("needs passwordless sudo bpftrace and tc: run scripts/setup_sudoers.sh once")
-        collect(con, a.suite, a.split, a.seed0, a.n, n_none, a.cal, a.force)
+        with cpu_load(a.load):
+            collect(con, a.suite, a.split, a.seed0, a.n, n_none, a.cal, a.force, a.cal_split)
     dump = {}
     for rule in SUITES[a.suite]["rules"]:
-        profile, kprofile, results = evaluate(con, a.suite, a.split, rule, a.variants)
+        profile, kprofile, results = evaluate(con, a.suite, a.split, rule, a.variants, a.cal_split)
         report(a.suite, rule, a.variants, profile, kprofile, results)
         dump[rule] = {"profile": profile, "kernel_profile": kprofile, "runs": results}
     if a.json:
