@@ -43,7 +43,7 @@ SUITES = {
     "subtle": {"faults": ["none"] + SUBTLE_FAULTS, "magnitude": "subtle", "rules": ["coarse", "tight"]},
     "pairs": {"faults": TWO_FAULT_PAIRS, "magnitude": "normal", "rules": ["coarse"]},
 }
-LABEL = {"base": "base", "v2": "v2", "v3": "v3", "v4": "v4", "v5": "v5"}
+LABEL = {"base": "base", "v2": "v2", "v3": "v3", "v4": "v4", "v5": "v5", "pool": "pool", "poolw": "poolw"}
 
 
 @contextlib.contextmanager
@@ -92,6 +92,9 @@ def diagnose(variant, spans, tl, profile, kprofile, seed):
     elif variant == "v5":
         out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True, slow_api=True,
                                 latent_baseline=True, run_level=True)
+    elif variant in ("pool", "poolw"):     # Stage 13: v3's rules fed run-wide host-metric evidence instead of per-span joined evidence
+        out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True, slow_api=True,
+                                source="pooled" if variant == "pool" else "pooled_wait")
     elif variant == "v4":
         out = combined.diagnose(tl, profile, kprofile, tie_seed=seed, loss_explains_rtt=True, slow_api=True,
                                 latent_baseline=True)

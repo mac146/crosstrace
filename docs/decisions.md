@@ -214,3 +214,8 @@ Running log. Newest at the bottom. Each entry: decision, why.
 
 ## D39. The compiled collector is installed to a root-owned path (Stage 12)
 - sudoers allows only `/usr/local/libexec/crosstrace/ctrace`, copied by `setup_sudoers.sh`; not the build directory.
+
+## D40. The join was tested against its cheapest alternative, and the claim was narrowed (Stage 13)
+- Host-level pooled evidence (`diagnose(..., source="pooled")`) ties the joined method on single network faults but cannot name a slow
+  server; with the run's maximum server wait added it matches the joined method on everything recorded. The README now says what carries the
+  result (per-request kernel timing) and what the benchmark cannot show (when the per-span join itself is needed).

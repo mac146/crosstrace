@@ -73,6 +73,12 @@ runs failed on fresh data, so the old rule stays (a negative result). A compiled
 1.72 ms per 60 ms run; I predicted 3.4x and missed) with the same join integrity (160/160) and the same 512-thread completeness
 ([docs/results-stage12.md](docs/results-stage12.md)).
 
+**Stage 13 (is the join itself needed?).** I fed the same rules run-wide host-metric numbers instead of per-span evidence. On single
+network faults it tied (100%); without a per-request server wait it could not name a slow server (27-37%) and lost the net_latency+slow_model
+pair (0% vs 100%). But adding just the run's maximum server wait made it match the joined method everywhere. So what carries the result is
+per-request kernel timing, not the join to a span; this benchmark's faults hit whole services, so it cannot show when the join itself is
+needed (selective faults, concurrency). Related work (AgentSight, Beyla/OBI, RCAEval) and sources: [docs/results-stage13.md](docs/results-stage13.md).
+
 **How much to trust this**
 
 * The network gain is close to built in by the design of the experiment: the baseline cannot separate those causes

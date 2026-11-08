@@ -88,9 +88,27 @@ def attribute_http(excess, b, kp, loss_explains_rtt=False, slow_api=False):
     return {c: v for c, v in scores.items() if v > 0}, why
 
 
+def pooled(bds_by_span):
+    """Host-metrics evidence (Stage 13 comparison arm): the run-wide numbers a metrics stack would have, given to EVERY HTTP step.
+    Maximum DNS lookup, maximum smoothed RTT, total retransmits, maximum connect time; the server wait is dropped (a host counter
+    has no per-request wait), so slow_api cannot be named. Built only from events the correlator attached to the run's spans, so
+    it never sees foreign traffic (favours this arm)."""
+    allb = list(bds_by_span.values())
+
+    def mx(k):
+        xs = [b[k] for b in allb if b[k] is not None]
+        return max(xs) if xs else None
+    return {"n_events": sum(b["n_events"] for b in allb), "dns_ms": mx("dns_ms"), "connect_ms": mx("connect_ms"),
+            "retransmits": sum(b["retransmits"] for b in allb), "srtt_max_ms": mx("srtt_max_ms"),
+            "server_wait_ms": None, "_wait_if_generous": mx("server_wait_ms")}
+
+
 def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, slow_api=False,
-             latent_baseline=False, run_level=False):
-    """run_level (v5, added AFTER the real-network faults run, results-stage8.md): judge the model connection by run-level
+             latent_baseline=False, run_level=False, source="joined"):
+    """source: "joined" (default, each step's own kernel events), "pooled" (run-wide host-metric numbers for every step, no
+    server wait) or "pooled_wait" (as pooled plus the run's maximum server wait: an upper bound on a metrics stack).
+
+    run_level (v5, added AFTER the real-network faults run, results-stage8.md): judge the model connection by run-level
     evidence against per-class healthy thresholds, even when no step crossed its (noisy) duration threshold:
       * the run's DNS lookup above its healthy threshold            -> dns_delay (score = lookup ms)
       * the MEDIAN over the run's model calls of the smoothed RTT above its healthy threshold -> net_latency
@@ -107,6 +125,13 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
         scores[cause] = scores.get(cause, 0.0) + amount
         evidence.setdefault(cause, []).append(why)
 
+    if source not in ("joined", "pooled", "pooled_wait"):
+        raise ValueError(source)
+    pool = None
+    if source != "joined":
+        pool = pooled({sid: breakdown(e) for sid, e in http_entry.items()})
+        if source == "pooled_wait":
+            pool["server_wait_ms"] = pool["_wait_if_generous"]
     run_findings = False
     if run_level:
         thr = kprofile.get("classes", {}).get("model", {})
@@ -126,7 +151,7 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
             continue
         step = f"{span['name']} took {dur_ms(span):.0f}ms ({excess:.0f}ms over threshold)"
         https = [http_entry[d["span_id"]] for d in descendants(spans, span) if d["span_id"] in http_entry]
-        bds = [breakdown(h) for h in https]
+        bds = [({**pool, "span_ms": breakdown(h)["span_ms"]} if pool else breakdown(h)) for h in https]
         if key == "chat":
             if any(attr(d, "http.response.status_code") == 429 for d in descendants(spans, span)):
                 add("rate_limit", excess, step + ", HTTP 429 seen")
