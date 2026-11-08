@@ -108,8 +108,9 @@ def available():
 
 
 def _c_wanted():
-    """CROSSTRACE_COLLECTOR: 'bpftrace' (default), 'c' (compiled, must be installed) or 'auto' (compiled if installed)."""
-    mode = os.environ.get("CROSSTRACE_COLLECTOR", "bpftrace")
+    """CROSSTRACE_COLLECTOR: 'auto' (default: the compiled collector if it is installed, else bpftrace), 'c' (compiled, must be
+    installed) or 'bpftrace'."""
+    mode = os.environ.get("CROSSTRACE_COLLECTOR", "auto")
     if mode == "bpftrace":
         return False
     from collectors import cebpf

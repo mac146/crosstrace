@@ -89,9 +89,15 @@ static __always_inline struct ct_rec *rec(__u8 type)
 
 static __always_inline void who(struct ct_rec *r)
 {
-	__u64 pt = bpf_get_current_pid_tgid();
-	r->pid = pt >> 32;
-	r->tid = (__u32)pt;
+	struct bpf_pidns_info ns;
+	if (cfg.pidns_ino && !bpf_get_ns_current_pid_tgid(cfg.pidns_dev, cfg.pidns_ino, &ns, sizeof(ns))) {
+		r->pid = ns.tgid;       /* same ids the traced program sees (WSL/containers run in a pid namespace) */
+		r->tid = ns.pid;
+	} else {
+		__u64 pt = bpf_get_current_pid_tgid();
+		r->pid = pt >> 32;
+		r->tid = (__u32)pt;
+	}
 	bpf_get_current_comm(r->comm, sizeof(r->comm));
 }
 

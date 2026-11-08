@@ -203,3 +203,14 @@ Running log. Newest at the bottom. Each entry: decision, why.
 ## D36. A fix that did not help was reverted (Stage 11)
 - Emitting connect-end without the per-socket map entry changed nothing about the 0.1% missing events at 512 threads, so it was removed.
   Kept: bpftrace lost-event warnings (no `-q`) and the unparseable-line counter. The gap tracks accept-queue overflow of the mock server.
+
+## D37. A compiled collector next to the bpftrace one (Stage 12)
+- C + libbpf (CO-RE, ring buffer, fixed 120-byte records, decoded after the run). Chosen because the cost was per-event text work.
+  Result: 2.9x less CPU (5.05 -> 1.72 ms per 60 ms run), not the 3.4x predicted; join, churn and tests equal. The bpftrace collector stays
+  as the fallback and the reference. Default `auto`.
+
+## D38. fentry for connect-end (Stage 12)
+- A controlled run recording both probes showed the tracepoint skipping events the fentry hook saw. Default fentry, tracepoint kept as fallback.
+
+## D39. The compiled collector is installed to a root-owned path (Stage 12)
+- sudoers allows only `/usr/local/libexec/crosstrace/ctrace`, copied by `setup_sudoers.sh`; not the build directory.

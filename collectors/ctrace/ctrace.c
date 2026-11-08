@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include <bpf/libbpf.h>
@@ -60,6 +61,11 @@ int main(int argc, char **argv)
 			fprintf(stderr, "usage: ctrace [--port N]... [--dns-port N]... [--reduce-rtt] [--tcp-send] [--libc-dns PATH]\n");
 			return 2;
 		}
+	}
+	struct stat st;
+	if (!stat("/proc/self/ns/pid", &st)) {
+		cfg.pidns_dev = st.st_dev;
+		cfg.pidns_ino = st.st_ino;
 	}
 	libbpf_set_print(quiet_log);
 	struct ctrace_bpf *sk = ctrace_bpf__open();

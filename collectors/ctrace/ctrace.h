@@ -36,6 +36,7 @@ struct ct_cfg {
 	unsigned int n_dns;
 	unsigned int reduce_rtt;
 	unsigned int tcp_send;
+	unsigned long long pidns_dev, pidns_ino;   /* the loader's pid namespace: ids are reported as the loader sees them */
 	unsigned short ports[CT_MAX_PORTS];
 	unsigned short dns_ports[CT_MAX_PORTS];
 };

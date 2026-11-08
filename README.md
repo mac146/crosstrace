@@ -79,6 +79,8 @@ load remain untested.
   latency (one earlier session read +7.5%) and about 1.3 ms of CPU per 60 ms run; adding the eBPF collector gives
   +2.3% to +5.2% latency and roughly 3 ms of bpftrace CPU per run. A shared provider and in-kernel filtering did not help.
   The spread between sessions is larger than within one, so treat any single number as a range.
+  Stage 12: a compiled C/libbpf collector cut the collector's CPU from about 5.1 to 1.7 ms per run (2.9x; I predicted 3.4x) with the
+  same join integrity and event completeness ([docs/results-stage12.md](docs/results-stage12.md)).
 * Everything ran on loopback, with mock model and API servers, plain HTTP, one injected fault at a time, and faults
   I chose (large, hundreds of ms). Real networks, TLS, concurrent faults and subtle degradation are untested.
 
@@ -116,6 +118,8 @@ load remain untested.
 * **Kernel collector** ([collectors/](collectors)): a bpftrace program (`net_events.bt`) wrapped in Python. DNS via
   `sendto`/`recvfrom`, connects via a `tcp_v4_connect` kprobe and `sock:inet_sock_set_state`, plus
   `tcp:tcp_retransmit_skb` and `tcp:tcp_probe` (RTT). Output is JSON lines on CLOCK_MONOTONIC.
+  A compiled equivalent ([collectors/ctrace/](collectors/ctrace), C + libbpf; build with `make -C collectors/ctrace`, install with
+  `./scripts/setup_sudoers.sh`) is used automatically when installed (`CROSSTRACE_COLLECTOR=bpftrace` forces the bpftrace one).
 * **Correlator** ([correlator/](correlator)): converts kernel timestamps to the spans' wall clock using clock pairs
   sampled every 100 ms (the wall clock was seen stepping ~3 ms against the monotonic clock in 4% of runs), then
   attaches events to spans: exact pid/tid + time for DNS and connects, the connection's 4-tuple for RTT and

@@ -28,4 +28,7 @@ sudo visudo -cf /etc/sudoers.d/crosstrace
 sudo -k   # forget cached credentials so the checks below are honest
 sudo -n tc qdisc show dev lo && echo "OK: passwordless tc works"
 sudo -n bpftrace --version && echo "OK: passwordless bpftrace works"
-if [ -x "$DEST" ]; then sudo -n "$DEST" --bad-flag 2>/dev/null; [ $? -eq 2 ] && echo "OK: passwordless ctrace works"; fi
+if [ -x "$DEST" ]; then
+  rc=0; sudo -n "$DEST" --bad-flag 2>/dev/null || rc=$?   # usage error (status 2) proves it ran without a password
+  [ "$rc" -eq 2 ] && echo "OK: passwordless ctrace works"
+fi
