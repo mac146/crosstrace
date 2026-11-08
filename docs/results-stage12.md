@@ -57,3 +57,10 @@ installed), `c` or `bpftrace`.
 `setup_sudoers.sh` now copies the compiled collector to the root-owned `/usr/local/libexec/crosstrace/ctrace` and allows only that path;
 a binary in a user-writable folder could be replaced and then run as root. Re-run the script after every rebuild. As before, passwordless
 `bpftrace` is root-equivalent: dev WSL/VM only.
+
+## E. Where the compiled collector's in-process CPU goes (prediction 12: wrong)
+Same benchmark, 12 rounds x 40 runs, one session (this session's ctrace process read 1.2-1.3 ms instead of 1.0, so compare within it):
+in-process CPU per run is 0.89 ms with the 100 ms clock sampling and 0.78 ms with it effectively off, a fall of 0.11 ms (12%).
+I predicted at least a third (55%). So the clock-sync thread is a minor part; most of the cost is the reader thread reading the pipe
+(and starting the process), which I have not split further. The 100 ms sampling stays (it is what protects the join from clock steps).
+A candidate fix, not built: let ctrace write to a file or shared memory and read it after the run, so Python does nothing during the run.
