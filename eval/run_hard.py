@@ -60,7 +60,7 @@ def cpu_load(n):
             p.wait()
 
 
-def collect(con, suite, split, seed0, n, n_none, n_cal, force, cal_split=CAL_SPLIT):
+def collect(con, suite, split, seed0, n, n_none, n_cal, force, cal_split=CAL_SPLIT, llm_kind="mock"):
     cfg = SUITES[suite]
     todo = [(cal_split, "none", CAL_SEED0 + i, "normal") for i in range(n_cal)]
     for f in cfg["faults"]:
@@ -70,7 +70,7 @@ def collect(con, suite, split, seed0, n, n_none, n_cal, force, cal_split=CAL_SPL
         rid = f"{sp}-{fault}-{seed}"
         if not force and store.run_exists(con, rid) and store.load_env(con, rid) is not None:
             continue
-        run_one(fault, seed, con, sp, kernel=True, magnitude=mag)
+        run_one(fault, seed, con, sp, kernel=True, magnitude=mag, llm_kind=llm_kind)
         if k % 10 == 0:
             print(f"  {k}/{len(todo)} runs", file=sys.stderr, flush=True)
 
@@ -167,6 +167,8 @@ def main():
     ap.add_argument("--load", type=int, default=0, help="busy-loop processes running while RECORDING (CPU load)")
     ap.add_argument("--cal-split", default=CAL_SPLIT,
                     help="healthy calibration split to record into / calibrate from (e.g. hardcal_load)")
+    ap.add_argument("--llm-kind", default="mock", choices=["mock", "langgraph-mock"],
+                    help="which agent to run: our own (mock) or the LangGraph agent against the mock model server")
     ap.add_argument("--only", nargs="+", default=None, help="restrict to these faults of the suite")
     ap.add_argument("--variants", nargs="+", default=["base", "v2"], choices=list(LABEL))
     ap.add_argument("--db", default=None)
@@ -185,7 +187,7 @@ def main():
         if not bpf_available() or not tc_available():
             sys.exit("needs passwordless sudo bpftrace and tc: run scripts/setup_sudoers.sh once")
         with cpu_load(a.load):
-            collect(con, a.suite, a.split, a.seed0, a.n, n_none, a.cal, a.force, a.cal_split)
+            collect(con, a.suite, a.split, a.seed0, a.n, n_none, a.cal, a.force, a.cal_split, a.llm_kind)
     dump = {}
     for rule in SUITES[a.suite]["rules"]:
         profile, kprofile, results = evaluate(con, a.suite, a.split, rule, a.variants, a.cal_split)
