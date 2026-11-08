@@ -2,7 +2,7 @@
 
 # Does kernel-level tracing help diagnose slow AI agents? A pre-registered benchmark, with negative results
 
-**Author:** TODO (name, affiliation or "independent")  ·  **Code and data:** the `crosstrace` repository (TODO: final URL and the commit hash this report describes)
+**Author:** Mayank Kumar Singh (independent)  ·  **Code and data:** https://github.com/mac146/crosstrace (commit: TODO, fill in the hash of the final commit this report describes)
 
 ## Abstract
 
@@ -180,7 +180,7 @@ Intervals at n = 20 are 100% = [84, 100] and 0% = [0, 16]; healthy runs: 20/20 "
 ---
 
 ## Open TODOs
-- Author, repository URL, commit hash, refreshed test count.
+- Commit hash of the final version (author and repository URL are filled in), refreshed test count.
 - Author review: read every limit and headline claim once; the assistant's pass could not judge what a skeptical reader would question.
 - State which commit froze the v1 rules (Stages 1-4 have no predictions files).
 - Confirm `make reproduce` coverage of Stages 13-14.
