@@ -110,6 +110,21 @@ def _is_hostname(s):
         return True
 
 
+class _SpanIndex:
+    """Entries sorted by start time. near(t, slack) returns every entry that could contain t within the slack: those that
+    start no later than t + slack and no earlier than t - slack - (the longest span), found by bisect."""
+
+    def __init__(self, entries):
+        self.entries = sorted(entries, key=lambda e: e.span["start_ns"])      # stable: ties keep their given order
+        self.starts = [e.span["start_ns"] for e in self.entries]
+        self.longest = max((e.span["end_ns"] - e.span["start_ns"] for e in self.entries), default=0)
+
+    def near(self, t, slack):
+        lo = bisect.bisect_left(self.starts, t - slack - self.longest)
+        hi = bisect.bisect_right(self.starts, t + slack)
+        return self.entries[lo:hi]
+
+
 def correlate(spans, kernel_events, clock_pairs, slack_ns=1_000_000, tail_ns=5_000_000_000):
     clock = ClockMap(clock_pairs)
     slack = slack_ns + clock.err_ns
@@ -119,7 +134,7 @@ def correlate(spans, kernel_events, clock_pairs, slack_ns=1_000_000, tail_ns=5_0
     http = [e for e in entries if _is_http(e.span)]
     events = sorted(({**e, "wall_ns": clock.to_wall(e["t"])} for e in kernel_events), key=lambda e: e["wall_ns"])
     claimed = set()   # index into `events`
-    flows = {}        # (client_port, server_port) -> list of Entry that own the flow
+    flows = {}        # (smaller port, larger port) of a connection -> list of Entry that own it
 
     def attach(entry, i, how):
         entry.kernel.append(Attached(events[i], how))
@@ -139,25 +154,37 @@ def correlate(spans, kernel_events, clock_pairs, slack_ns=1_000_000, tail_ns=5_0
                 for i, e in enumerate(candidates) if e.span["start_ns"] - slack <= t <= e.span["end_ns"] + slack]
         return min(near)[3] if near else None
 
-    def same_thread(entry, ev):
-        a = entry.span["attrs"]
-        return a.get("process.pid") == ev.get("pid") and a.get("thread.id") == ev.get("tid")
+    def pair(ev):
+        a, b = ev.get("sport"), ev.get("dport")
+        return (min(a, b), max(a, b)) if a is not None and b is not None else None
+
+    # lookups are indexed (by thread, by server port, by connection) so the cost grows with the number of events, not with
+    # events x spans; the matching rules are exactly those below
+    by_thread = {}
+    for e in http:
+        a = e.span["attrs"]
+        by_thread.setdefault((a.get("process.pid"), a.get("thread.id")), []).append(e)
+    thread_index = {k: _SpanIndex(v) for k, v in by_thread.items()}
 
     # 1. exact PID/TID evidence
     for i, ev in enumerate(events):
         if ev["ev"] in PID_DNS:   # a lookup belongs to a span that resolves a hostname
-            cands = [e for e in http if same_thread(e, ev) and _is_hostname(e.span)]
+            def want(e):
+                return _is_hostname(e.span)
         elif ev["ev"] in PID_TCP or ev["ev"] == "tcp_send":
             # a send from this thread to the span's server is the span's own request; a send from another process
             # (the server answering on loopback) matches nothing here and is handled as a flow event below
-            cands = [e for e in http if same_thread(e, ev) and e.span["attrs"]["server.port"] == ev.get("dport")]
+            def want(e, port=ev.get("dport")):
+                return e.span["attrs"]["server.port"] == port
         else:
             continue
+        idx = thread_index.get((ev.get("pid"), ev.get("tid")))
+        cands = [e for e in idx.near(ev["wall_ns"], slack) if want(e)] if idx else []
         owner = choose(cands, ev["wall_ns"])
         if owner:
             attach(owner, i, "pid+time")
             if ev["ev"] in ("tcp_connect_end", "tcp_send"):
-                owners = flows.setdefault((ev["sport"], ev["dport"]), [])
+                owners = flows.setdefault(pair(ev), [])
                 if not any(o is owner for o in owners):   # a reused connection is owned by several spans in turn
                     owners.append(owner)
 
@@ -165,25 +192,34 @@ def correlate(spans, kernel_events, clock_pairs, slack_ns=1_000_000, tail_ns=5_0
     for i, ev in enumerate(events):
         if i in claimed or ev["ev"] not in FLOW_EVENTS:
             continue
-        for (cport, sport), owners in flows.items():
-            if {ev.get("sport"), ev.get("dport")} == {cport, sport}:
-                t = ev["wall_ns"]
-                # the connection may outlive its span (teardown, late retransmits): allow a tail
-                live = [o for o in owners if o.span["start_ns"] - slack <= t <= o.span["end_ns"] + tail_ns]
-                if live:   # the most recently started owner wins (tuple reuse)
-                    attach(max(live, key=lambda o: o.span["start_ns"]), i, "flow")
-                break
+        key = pair(ev)
+        owners = flows.get(key) if key else None
+        if owners:
+            t = ev["wall_ns"]
+            # the connection may outlive its span (teardown, late retransmits): allow a tail
+            live = [o for o in owners if o.span["start_ns"] - slack <= t <= o.span["end_ns"] + tail_ns]
+            if live:   # the most recently started owner wins (tuple reuse)
+                attach(max(live, key=lambda o: o.span["start_ns"]), i, "flow")
 
     # 3. fallback for spans with no known flow (connect never completed): port + time
     flow_owner_ids = {id(o) for owners in flows.values() for o in owners}
-    flowless = [e for e in http if id(e) not in flow_owner_ids]
-    flow_pairs = {frozenset(k) for k in flows}
+    by_port = {}
+    for e in http:
+        if id(e) not in flow_owner_ids:
+            by_port.setdefault(e.span["attrs"]["server.port"], []).append(e)
+    port_index = {k: _SpanIndex(v) for k, v in by_port.items()}
     for i, ev in enumerate(events):
         if i in claimed or ev["ev"] not in FLOW_EVENTS:
             continue
-        if frozenset((ev.get("sport"), ev.get("dport"))) in flow_pairs:
+        key = pair(ev)
+        if key in flows:
             continue   # belongs to a known flow of some span, just outside its window: not ours to guess
-        cands = [e for e in flowless if e.span["attrs"]["server.port"] in (ev.get("sport"), ev.get("dport"))]
+        cands = []
+        for port in {ev.get("sport"), ev.get("dport")}:
+            idx = port_index.get(port)
+            if idx:
+                cands += idx.near(ev["wall_ns"], slack)
+        cands.sort(key=lambda e: (e.span["start_ns"], -e.span["end_ns"]))
         if ev["ev"] == "tcp_send":
             # a send towards a span's server carries a pid/tid and was already offered to that span's thread in step 1;
             # it must not be guessed onto another thread's span by port + time. Only the server's own sends qualify.
