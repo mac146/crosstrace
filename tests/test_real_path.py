@@ -41,6 +41,38 @@ def test_real_parameters_are_seeded_and_in_range():
         real_params("slow_db", 1)
 
 
+REAL_ETH0 = """qdisc mq 0: root
+qdisc pfifo_fast 0: parent :8 bands 3 priomap 1 2 2 2 1 2 0 0 1 1 1 1 1 1 1 1
+qdisc pfifo_fast 0: parent :7 bands 3 priomap 1 2 2 2 1 2 0 0 1 1 1 1 1 1 1 1
+"""
+
+
+def test_the_normal_default_qdisc_is_not_mistaken_for_our_fault():
+    # the verbatim `tc qdisc show dev eth0` of a stock WSL2 interface: it contains the word "priomap"
+    assert real_path.has_our_qdisc(REAL_ETH0) is False
+    assert real_path.has_our_qdisc("qdisc noqueue 0: root refcnt 2") is False
+    assert real_path.has_our_qdisc("qdisc prio 1: root refcnt 2 bands 3 priomap 1 1 1") is True
+    assert real_path.has_our_qdisc("qdisc prio 1: root\nqdisc netem 10: parent 1:1 limit 1000 delay 5ms") is True
+    assert real_path.has_our_qdisc("qdisc mq 0: root\nqdisc netem 8001: parent :1 delay 1ms") is True
+
+
+def test_a_clean_default_interface_is_accepted_and_restored_without_a_false_alarm(monkeypatch):
+    state = {"on": False}
+
+    def fake_tc(args, check=True):
+        if args[:2] == ["qdisc", "replace"]:
+            state["on"] = True
+        if args[:2] == ["qdisc", "del"]:
+            state["on"] = False
+        out = "qdisc prio 1: root refcnt 2 bands 3" if state["on"] else REAL_ETH0
+        return subprocess.CompletedProcess(args, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(real_path, "_tc", fake_tc)
+    with PathFault("eth0", [(6, "1.2.3.4", 443)], delay_ms=10):      # must not raise on entry (priomap) ...
+        assert state["on"] is True
+    assert state["on"] is False                                       # ... nor on exit after a correct restore
+
+
 def test_refuses_to_touch_an_interface_that_already_has_a_fault(monkeypatch):
     seen = []
 

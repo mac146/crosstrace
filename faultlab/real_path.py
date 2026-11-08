@@ -15,6 +15,7 @@ Manual cleanup if ever needed:  sudo tc qdisc del dev eth0 root   (and the same 
 import atexit
 import os
 import random
+import re
 import socket
 import subprocess
 import threading
@@ -70,6 +71,12 @@ def tc_commands(dev, matches, delay_ms=0, loss_pct=0):
     return cmds
 
 
+def has_our_qdisc(show_output):
+    """True if `tc qdisc show` lists a prio or netem qdisc. Matches the qdisc KIND at the start of a line: a plain substring
+    test is wrong, because the normal pfifo_fast qdisc prints "priomap" (found when the first real run refused to start)."""
+    return re.search(r"^qdisc (prio|netem)\b", show_output, flags=re.MULTILINE) is not None
+
+
 def _tc(args, check=True):
     prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
     return subprocess.run(prefix + ["tc", *args], check=check, capture_output=True, text=True)
@@ -90,7 +97,7 @@ class PathFault:
 
     def __enter__(self):
         current = _tc(["qdisc", "show", "dev", self.dev]).stdout
-        if "prio" in current or "netem" in current:
+        if has_our_qdisc(current):
             raise RuntimeError(f"{self.dev} already has a prio/netem qdisc, refusing to touch it:\n{current.strip()}\n"
                                f"Clean up with: sudo tc qdisc del dev {self.dev} root")
         self._before = current
@@ -112,7 +119,7 @@ class PathFault:
             self._timer.cancel()
         self._remove()
         after = _tc(["qdisc", "show", "dev", self.dev]).stdout
-        if "prio" in after or "netem" in after:
+        if has_our_qdisc(after):
             raise RuntimeError(f"FAILED to restore {self.dev}! Run: sudo tc qdisc del dev {self.dev} root\n{after}")
 
 
