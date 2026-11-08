@@ -12,11 +12,11 @@ upper bound: a host counter has no such number, a per-request tracer or a server
 ## Results (top-1; for pairs, "both faults in the top 2")
 | | base | v3 (joined) | pool | poolw |
 |---|---|---|---|---|
-| dns_delay, net_latency (hard_b, hard_c, lg_a: 9 groups of 30) | 13-30% | 100% | 100% | 100% |
+| dns_delay, net_latency (hard_b, hard_c, lg_a: 6 groups of 30) | 13-30% | 100% | 100% | 100% |
 | packet_loss (3 groups) | 10-20% | 93-97% | 93-97% | 93-97% |
 | **slow_api** (hard_b, hard_c, lg_a) | 27-37% | **100%** | **27-37%** | 100% |
 | healthy runs, false alarms | 0/90 | 0/90 | 0/90 | 0/90 |
-| pairs, mean "both in top 2" over 8 pairs | 28.7% | **88.3%** | **54.6%** | 88.3% |
+| pairs, mean "both in top 2" over 8 pairs (includes the known-flawed rate_limit+slow_db pair, 23.3% in every arm; it does not change the comparison) | 28.7% | **88.3%** | **54.6%** | 88.3% |
 | pairs, net_latency+slow_model | 23% | 100% | **0%** | 100% |
 | pairs, slow_api+slow_db / dns_delay+slow_api | 30% / 10% | 100% / 100% | **30% / 0%** | 100% / 100% |
 

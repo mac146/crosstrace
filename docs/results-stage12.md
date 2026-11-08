@@ -8,8 +8,8 @@ written after the toolchain was installed and before the collector was built.
   the `sock:inet_sock_set_state` tracepoint missed (prediction 2 held). Likely cause: a kprobe/tracepoint is skipped when another BPF
   program is already running on that CPU; fentry has its own recursion guard. This is a hypothesis that fits the data, not a proven mechanism.
 - fentry is now the default connect-end: missing share 0.1% -> 0.003-0.004% (3 of 74,240) at backlog 256 (prediction 3 held).
-  The remaining 3 are connections whose handshake needed a SYN retransmit (about 1 s); all three collectors (tracepoint, fentry in
-  bpftrace, fentry in C) show the same residual, so it is not a collector bug I understand yet.
+  Both fentry collectors (bpftrace and C) show the same 3 of 74,240; the tracepoint had 0.06-0.13%. In the examples I inspected (C collector)
+  the connection's SYN had been retransmitted (about 1 s), but I did not establish that this is the cause of the 3 misses.
 
 ## B. Packet loss on the real (NAT'd WSL) path: negative result
 - On the design set, a per-run feature other than the plain retransmit count looked better; on a fresh set it did not hold
