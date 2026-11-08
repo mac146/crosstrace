@@ -1,5 +1,8 @@
 # Run inside WSL/Linux (see README.md). Targets marked ROOT need passwordless sudo for tc and bpftrace
 # (scripts/setup_sudoers.sh, once) and change network settings on the loopback interface: dev WSL/VM only.
+# pipefail: `make reproduce` pipes through tee, which otherwise hides a failing step (exit code 0 although it failed)
+SHELL := /bin/bash
+.SHELLFLAGS := -o pipefail -c
 VENV ?= $(HOME)/.venvs/crosstrace
 PYTHON ?= $(VENV)/bin/python
 N ?= 30

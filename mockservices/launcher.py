@@ -33,26 +33,44 @@ def _spawn(module, port, extra):
                          stdout=subprocess.PIPE, text=True)
     if p.stdout.readline().strip() != "READY":
         p.kill()
+        p.wait()
+        p.stdout.close()
         raise RuntimeError(f"{module} failed to start")
     return p
 
 
+def _stop(procs):
+    for p in procs:
+        p.terminate()
+    for p in procs:
+        p.wait(timeout=5)
+        p.stdout.close()
+
+
+START_ATTEMPTS = 5
+
+
 @contextlib.contextmanager
 def services(llm_args=(), api_args=(), dns_args=()):
-    llm_port, api_port = free_port(), free_port()
-    dns_port = free_port(socket.SOCK_DGRAM)
-    procs = []
+    # A free port is picked, released, and bound a moment later by the server process, so another process can grab it in
+    # between ("Address already in use", seen about once in 200 launches). Retry with fresh ports.
+    for attempt in range(START_ATTEMPTS):
+        llm_port, api_port = free_port(), free_port()
+        dns_port = free_port(socket.SOCK_DGRAM)
+        procs = []
+        try:
+            for module, port, extra in (("mockservices.llm_server", llm_port, llm_args),
+                                        ("mockservices.api_server", api_port, api_args),
+                                        ("mockservices.dns_server", dns_port, dns_args)):
+                procs.append(_spawn(module, port, extra))
+            break
+        except RuntimeError:
+            _stop(procs)
+            if attempt == START_ATTEMPTS - 1:
+                raise
     try:
-        for module, port, extra in (("mockservices.llm_server", llm_port, llm_args),
-                                    ("mockservices.api_server", api_port, api_args),
-                                    ("mockservices.dns_server", dns_port, dns_args)):
-            procs.append(_spawn(module, port, extra))
         yield Services(f"http://127.0.0.1:{llm_port}", f"http://{API_HOST}:{api_port}",
                        ("127.0.0.1", dns_port), llm_port, api_port,
                        {"llm": procs[0].pid, "api": procs[1].pid, "dns": procs[2].pid})
     finally:
-        for p in procs:
-            p.terminate()
-        for p in procs:
-            p.wait(timeout=5)
-            p.stdout.close()
+        _stop(procs)
