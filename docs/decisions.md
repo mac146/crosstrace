@@ -152,3 +152,10 @@ Running log. Newest at the bottom. Each entry: decision, why.
 - Keys live in a git-ignored `.env` (or a mode-600 file); code reads them in-process and scrubs them from errors before they
   reach spans or the database. A key is deleted from disk after use, and the user is asked to revoke it. Free models of the
   OpenCode API refuse API use; the restriction was respected, not bypassed.
+
+## D27. What the real-model run changed in my claims (Stage 6)
+- v3's latent-loss rule and its server-wait signal were designed on loopback. A real model over TLS showed that the first
+  false-alarms on healthy runs (5 of 8) and that server wait is undefined for a remote server. Both are recorded as known
+  limitations, not patched: v3 stays frozen, and a v4 would need fresh seeds and a real-network healthy baseline.
+- An OpenRouter key belonging to another project was used at the user's explicit request: read in place from that project's
+  .env, never copied, cheap model chosen by me, hard token cap, spend reported ($0.0028). The unused OpenCode key's .env was deleted.

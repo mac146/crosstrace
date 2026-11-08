@@ -90,16 +90,46 @@ Slow-API suite, 30 per fault, base vs v3, thresholds calibrated on LangGraph hea
 * Limits: the model was the mock, over plain HTTP; instrumentation was written by me with knowledge of the join; the
   `create_react_agent` entry point is deprecated in LangGraph 1.x in favour of `langchain.agents.create_agent`.
 
-## 6. A real model and the real internet: NOT done
-The OpenCode key listed models but could not generate: paid models returned 402 (no credit) and free models returned 429
-("free models work in OpenCode"), so no tokens were spent. Two failed single runs still showed, with n = 2 and failed model
-calls only:
-* the kernel sees the TLS connection to port 443 (connect in 4-7 ms) and its RTT samples; contents are invisible, as expected;
-* **DNS lookups of the real hostname were not captured**: the probe watches how my own resolver client sends queries, not libc;
-* **a TCP retransmit appeared on a healthy real connection**, which the "latent loss" rule would count as packet loss.
+## 6. A real model over the real internet (LangGraph + `z-ai/glm-5.3-flash` through OpenRouter, TLS to a remote host)
+The model key was read in place from another of the user's projects (never copied; the key had about $3.83 of a $250 limit
+left); 128 model calls cost **$0.0028** (57,874 input and 9,477 output tokens). An earlier attempt with an OpenCode key could not
+generate (402 no credit; its free models answer 429 "free models work in OpenCode"), and that restriction was respected, not
+bypassed. Groups of 8 runs, so these are observations, not accuracy estimates; network faults were not injected (that would
+mean running `tc` on the real network). Healthy real model calls took 0.8-3.3 s.
 
-These are observations, not a test. A real-model run needs credit or another key (`make eval-real` for the Anthropic adapter;
-`agent/langgraph_agent.py` for an OpenAI-compatible endpoint).
+| thresholds calibrated on | group (8 runs) | base top-1 / false attr. | v3 top-1 / false attr. |
+|---|---|---|---|
+| 12 real healthy runs | healthy | 100% / 0% | **37.5% / 62.5%** |
+| | slow_tool | 87.5% / 0% | 87.5% / 12.5% |
+| | slow_db | 100% / 0% | 100% / 0% |
+| the mock (unchanged) | healthy | 0% / 100% | 0% / 100% |
+| | slow_tool | 0% / 100% | 0% / 100% |
+| | slow_db | 0% / 100% | 0% / 100% |
+
+Kernel visibility of the real model's HTTP spans (128 spans): connect evidence **1%**, DNS **0%**, RTT samples 98%, server-wait
+**0%**. The local API tool's spans: 100% on all four.
+
+Against `predictions-stage6d.md`:
+* **1 (mock thresholds fail on the real model): right.** The mock chat threshold is 54 ms; a healthy real call takes 1-3 s.
+  Calibrating on the real service gave 6.7 s.
+* **2 (real-calibrated healthy false alarms at most 25%): right for spans-only (0/8), wrong for v3 (5/8).**
+* **3 (local faults found, base = v3): right** (slow_tool 87.5% both, slow_db 100% both; one v3 slow_tool run was
+  mis-attributed, not investigated).
+* **4 (under 40% of model spans with connect evidence): right, more extreme than predicted (1%).**
+* **5 (a retransmit on a healthy real connection): right, and it is the cause of the v3 false alarms.** 5 of the 8 healthy runs
+  had 1-4 TCP retransmits on the model connection, and my "latent loss" rule reports any retransmit as packet loss even when
+  nothing was slow. On loopback there are none, so the rule looked free; on a real network it is a false-accusation machine.
+
+What this teaches, and what is NOT fixed (v3 is frozen):
+* **The latent-loss rule needs a healthy baseline** (retransmits per run above what healthy runs show) instead of "at least one".
+  There is a trade-off: injected loss gave 1-3 retransmits per run, so a threshold hides some of the loss the rule exists to catch.
+* **The "server wait" signal, and therefore the slow-server rule, cannot work for a remote server as built.** It is computed
+  from both ends of a loopback connection; for a remote server only the client end is visible, so the value is undefined (0% above).
+* **Connect evidence was missing** most likely because langchain-openai reuses a cached HTTP client across runs in one process
+  (one connection opened once); I did not verify this. Flow evidence still attached by port + time (RTT 98%).
+* **Thresholds must be calibrated against the real service.** Mock-calibrated ones are useless there.
+* **Still untested:** DNS capture for a libc resolver (0% here), network faults on a real path, a different model or provider,
+  concurrency, production traffic.
 
 ## 7. Overhead work (agent workload, 12 rounds, A/A-controlled, 3 sessions)
 Per-run overhead versus the same round's untraced block; the range is across sessions (Stage 4's session read +7.5% for OTel).
@@ -120,5 +150,5 @@ Per-run overhead versus the same round's untraced block; the range is across ses
   overhead number from this repo should be read as a range.
 
 ## What is still untested
-A real model and TLS end to end; real network faults; real DNS resolution paths; production load; an agent whose spans I did
-not write; concurrency beyond a few threads; three or more faults; faults outside the catalogue.
+Real network faults; real DNS resolution paths (libc resolver); production load; a second model or provider; an agent whose spans I
+did not write on a real model (LangGraph ran against a real model, but with spans I wrote); concurrency beyond a few threads; three or more faults; faults outside the catalogue.

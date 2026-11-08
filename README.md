@@ -35,8 +35,11 @@ The four non-network faults and the healthy runs are 100% for both diagnosers: s
 the Stage 4 diagnoser blamed the network every time (0% right); after one added rule it was right in 100% of 30 fresh-seed
 runs. Subtle 20-100 ms faults, two faults at once (90-100% on most pairs; one weakness found, not fixed), a machine with all
 cores busy, and a third-party agent framework (LangGraph, 96.7-100% on the same faults against the mock model) all kept the
-advantage. Where my predictions were wrong, the results document says so. **Not tested: a real model and the real
-internet** (the API key available had no credit), real network faults, production load.
+advantage. A first run against a **real model over the real internet** (small sample) found two real problems: the
+combined diagnoser raised false alarms on healthy runs because real connections routinely show TCP retransmits (it
+reported them as packet loss), and its server-wait signal cannot be computed for a remote server. Thresholds also have
+to be calibrated on the real service. Where my predictions were wrong, the results document says so. **Not tested:**
+network faults on a real path, production load.
 
 **How much to trust this**
 
