@@ -102,6 +102,10 @@ tracepoint:tcp:tcp_probe
          args->srtt, args->data_len);
 }
 
+@@GAI_PROBES@@
+
+@@SEND_PROBE@@
+
 END {
   clear(@dns_t); clear(@c_t); clear(@o_pid); clear(@o_tid);
 }

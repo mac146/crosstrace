@@ -14,6 +14,7 @@ from collectors import store
 from collectors.ebpf import KernelCollector
 from faultlab.faults import make_plan
 from faultlab.netem import Netem
+from faultlab.real_path import REAL_FAULTS, real_path_fault
 from mockservices.launcher import services
 
 TASK = "What is customer 42's order total and shipping status?"
@@ -65,7 +66,10 @@ def run_one(fault, seed, con, split="eval", kernel=False, magnitude="normal", ll
     """
     remote = llm_kind in ("anthropic", "langgraph")
     # "langgraph-mock": the same LangGraph agent, pointed at the local mock model server (no key, no internet)
-    plan = make_plan(fault, seed, magnitude)
+    # Real-network faults (dns_delay / net_latency / packet_loss on the REAL path to the real model server) exist only
+    # for llm_kind="langgraph"; the local plan is then the healthy one and the fault is applied by faultlab.real_path.
+    real = llm_kind == "langgraph" and fault in REAL_FAULTS
+    plan = make_plan("none" if real else fault, seed, magnitude)
     run_id = f"{split}-{fault}-{seed}"
     status, error = "ok", None
     with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
@@ -78,8 +82,9 @@ def run_one(fault, seed, con, split="eval", kernel=False, magnitude="normal", ll
         if kernel:
             # must start before DbLock: collector startup takes ~1s and would eat the lock window
             collector = stack.enter_context(KernelCollector(
-                dns_ports=[svc.dns_server[1]] + ([53] if llm_kind == "langgraph" else []), reduce_rtt=True,
-                ports=[svc.api_port, 443 if remote else svc.llm_port]))
+                dns_ports=[svc.dns_server[1]], reduce_rtt=True,
+                ports=[svc.api_port, 443 if remote else svc.llm_port],
+                libc_dns=llm_kind == "langgraph", tcp_send=llm_kind == "langgraph"))
         db_hook = None
         if plan.db_lock_ms:
             db_hook = stack.enter_context(DbLock(db, plan.db_lock_ms)).arm
@@ -92,6 +97,13 @@ def run_one(fault, seed, con, split="eval", kernel=False, magnitude="normal", ll
         else:
             llm = LLMClient(svc.llm_url, tracing)
         tools = Tools(db, svc.api_url, svc.dns_server, tracing, plan.slow_extra_ms, db_hook=db_hook)
+        real_params, target_ips, model_host = None, [], None
+        if real:
+            from agent.langgraph_agent import load_settings
+            from urllib.parse import urlparse
+            model_host = urlparse(load_settings()[1]).hostname
+            fault_cm, real_params, target_ips = real_path_fault(fault, seed, model_host)
+            stack.enter_context(fault_cm)      # applied only now: after the collector is up, removed when the run ends
         t_start = time.time_ns()
         try:
             if llm_kind in ("langgraph", "langgraph-mock"):
@@ -104,12 +116,26 @@ def run_one(fault, seed, con, split="eval", kernel=False, magnitude="normal", ll
             status, error = "error", f"{type(e).__name__}: {e}"
         t_end = time.time_ns()
         spans = tracing.spans()
+    truth_params = plan.params
+    truth_target = plan.target
+    if real:
+        from diagnosers.common import COMPONENT
+        truth_params, truth_target = dict(real_params), COMPONENT[fault]
+        # was the fault really on the path that the run used? (CDN addresses can change between resolve and connect)
+        if fault == "dns_delay":
+            looked = [e for e in collector.events if e["ev"] == "dns_response" and e.get("via") == "libc"
+                      and e.get("host") == model_host] if collector else []
+            truth_params["applied"] = bool(looked) and max(e["lat_ns"] for e in looked) / 1e6 >= 0.5 * real_params["delay_ms"]
+        else:
+            connects = [e for e in collector.events if e["ev"] == "tcp_connect_end"
+                        and e.get("dport") == 443] if collector else []
+            truth_params["applied"] = bool(connects) and all(e["daddr"] in target_ips for e in connects)
     store.save_run(
         con,
         {"run_id": run_id, "fault_type": fault, "seed": seed, "split": split,
          "started_ns": t_start, "ended_ns": t_end, "status": status, "error": error},
         spans,
-        {"fault_type": fault, "target": plan.target, "params": plan.params,
+        {"fault_type": fault, "target": truth_target, "params": truth_params,
          "start_ns": t_start, "end_ns": t_end})
     if collector is not None:
         env = {"agent_pid": os.getpid(), "api_port": svc.api_port, "llm_port": svc.llm_port,

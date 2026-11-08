@@ -11,15 +11,18 @@ def _event_line(a, t0, verbose):
     at = f"+{(e['wall_ns'] - t0) / 1e6:9.1f}ms"
     kind = e["ev"]
     if kind == "dns_query":
-        what = f"DNS query -> {e['daddr']}:{e['dport']}"
+        what = (f"DNS lookup of {e['host']} (libc)" if e.get("via") == "libc"
+                else f"DNS query -> {e['daddr']}:{e['dport']}")
     elif kind == "dns_response":
-        what = f"DNS response after {e['lat_ns'] / 1e6:.1f}ms"
+        what = f"DNS {'lookup done' if e.get('via') == 'libc' else 'response'} after {e['lat_ns'] / 1e6:.1f}ms"
     elif kind == "tcp_connect_start":
         what = f"TCP connect start -> :{e['dport']}"
     elif kind == "tcp_connect_end":
         what = f"TCP connected after {e['lat_ns'] / 1e6:.1f}ms (client port {e['sport']})"
     elif kind == "tcp_retransmit":
         what = f"TCP RETRANSMIT {e['sport']}->{e['dport']} (state {e['state']})"
+    elif kind == "tcp_send":
+        what = f"TCP send {e['sport']}->{e['dport']} {e['bytes']} bytes"
     else:
         what = f"rtt {e['sport']}->{e['dport']} srtt={e['srtt_us']}us bytes={e['bytes']}"
     return f"{'  ' * 0}    | {at}  {what}   [{a.match}]"

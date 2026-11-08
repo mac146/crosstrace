@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 PID_TCP = ("tcp_connect_start", "tcp_connect_end")
 PID_DNS = ("dns_query", "dns_response")
-FLOW_EVENTS = ("tcp_rtt", "tcp_retransmit")
+FLOW_EVENTS = ("tcp_rtt", "tcp_retransmit", "tcp_send")
 
 
 class ClockMap:
@@ -147,19 +147,23 @@ def correlate(spans, kernel_events, clock_pairs, slack_ns=1_000_000, tail_ns=5_0
     for i, ev in enumerate(events):
         if ev["ev"] in PID_DNS:   # a lookup belongs to a span that resolves a hostname
             cands = [e for e in http if same_thread(e, ev) and _is_hostname(e.span)]
-        elif ev["ev"] in PID_TCP:
+        elif ev["ev"] in PID_TCP or ev["ev"] == "tcp_send":
+            # a send from this thread to the span's server is the span's own request; a send from another process
+            # (the server answering on loopback) matches nothing here and is handled as a flow event below
             cands = [e for e in http if same_thread(e, ev) and e.span["attrs"]["server.port"] == ev.get("dport")]
         else:
             continue
         owner = choose(cands, ev["wall_ns"])
         if owner:
             attach(owner, i, "pid+time")
-            if ev["ev"] == "tcp_connect_end":
-                flows.setdefault((ev["sport"], ev["dport"]), []).append(owner)
+            if ev["ev"] in ("tcp_connect_end", "tcp_send"):
+                owners = flows.setdefault((ev["sport"], ev["dport"]), [])
+                if not any(o is owner for o in owners):   # a reused connection is owned by several spans in turn
+                    owners.append(owner)
 
     # 2. flow evidence for events without a PID: same 4-tuple as a connection a span opened
     for i, ev in enumerate(events):
-        if ev["ev"] not in FLOW_EVENTS:
+        if i in claimed or ev["ev"] not in FLOW_EVENTS:
             continue
         for (cport, sport), owners in flows.items():
             if {ev.get("sport"), ev.get("dport")} == {cport, sport}:
@@ -180,6 +184,10 @@ def correlate(spans, kernel_events, clock_pairs, slack_ns=1_000_000, tail_ns=5_0
         if frozenset((ev.get("sport"), ev.get("dport"))) in flow_pairs:
             continue   # belongs to a known flow of some span, just outside its window: not ours to guess
         cands = [e for e in flowless if e.span["attrs"]["server.port"] in (ev.get("sport"), ev.get("dport"))]
+        if ev["ev"] == "tcp_send":
+            # a send towards a span's server carries a pid/tid and was already offered to that span's thread in step 1;
+            # it must not be guessed onto another thread's span by port + time. Only the server's own sends qualify.
+            cands = [e for e in cands if e.span["attrs"]["server.port"] != ev.get("dport")]
         owner = choose(cands, ev["wall_ns"])
         if owner:
             attach(owner, i, "port+time")
@@ -211,6 +219,8 @@ def breakdown(entry):
     dns, conn = total("dns_response"), total("tcp_connect_end")
     srtt = [e["srtt_us"] for e in ev if e["ev"] == "tcp_rtt"]
     resp = _resp_gap_ms(ev, entry.span["attrs"]["server.port"])
+    if resp is None:   # no server-side events (a remote server): use the client's own send and receive
+        resp = _client_wait_ms(ev, entry.span["attrs"]["server.port"])
     explained = sum(x for x in (dns, conn, resp) if x is not None)
     return {"span_ms": span_ms, "n_events": len(ev), "dns_ms": dns, "connect_ms": conn,
             "retransmits": sum(e["ev"] == "tcp_retransmit" for e in ev),
@@ -232,3 +242,23 @@ def _resp_gap_ms(events, server_port):
         return None
     before = [t for t in reqs if t < first_resp]
     return (first_resp - max(before)) / 1e6 if before else None
+
+
+def _client_wait_ms(events, server_port):
+    """Remote-server wait, from the client end only: the last send that has a response after it (the request: on a fresh
+    connection the TLS handshake sends come before it, and a later send with nothing after it cannot be the request) ->
+    the first payload bytes received after that send. Includes one round trip, so it is "time to first byte", not pure
+    server time; calibrate its healthy threshold on the same path.
+    (First version used the LARGEST send; a TLS ClientHello with post-quantum key shares is 1.5 KB, larger than a small
+    request, and gave 251 ms for a 5 s call. Found on the first real run.)"""
+    sends = [(e["wall_ns"], e.get("bytes", 0)) for e in events
+             if e["ev"] == "tcp_send" and e.get("dport") == server_port and e.get("bytes", 0) > 0]
+    recvs = sorted(e["wall_ns"] for e in events
+                   if e["ev"] == "tcp_rtt" and e.get("dport") == server_port and e.get("bytes"))
+    if not sends or not recvs:
+        return None
+    answered = [t for t, _ in sends if any(r > t for r in recvs)]
+    if not answered:
+        return None
+    request_t = max(answered)
+    return (min(r for r in recvs if r > request_t) - request_t) / 1e6

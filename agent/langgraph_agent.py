@@ -131,7 +131,7 @@ def build_tools(tools, tracing):
     return [db_query, http_api, slow_tool]
 
 
-def run_langgraph(task, tools, tracing, max_tokens=512, endpoint=None):
+def run_langgraph(task, tools, tracing, max_tokens=512, endpoint=None, fresh_connection=True):
     """Run the task; spans go to `tracing`. Returns the final answer text.
 
     endpoint=(base_url, api_key, model, max_retries) overrides the .env settings; used to point the same agent at the
@@ -144,8 +144,13 @@ def run_langgraph(task, tools, tracing, max_tokens=512, endpoint=None):
         retries = 0
     if not key:
         raise RuntimeError("no API key (OPENROUTER_API_KEY / OPENCODE_API_KEY) in the environment or the env file")
+    # langchain-openai caches one HTTP client per process, so every run after the first reuses its connection and never does
+    # a DNS lookup or a TLS handshake. A fresh client per run is what a short-lived job does, and it makes each run pay (and
+    # show) the lookup and connect, which is what the DNS and connect evidence needs.
+    import httpx
+    http_client = httpx.Client(timeout=60) if fresh_connection else None
     llm = TracedChat(model=model, base_url=base_url, api_key=key, max_tokens=max_tokens, timeout=60,
-                     max_retries=retries, tracing=tracing, secret=key)
+                     max_retries=retries, tracing=tracing, secret=key, http_client=http_client)
     graph = create_react_agent(llm, build_tools(tools, tracing), prompt=SYSTEM)
     with tracing.span("invoke_agent langgraph", {"gen_ai.operation.name": "invoke_agent",
                                                   "gen_ai.agent.name": "langgraph-react"}):
@@ -153,4 +158,7 @@ def run_langgraph(task, tools, tracing, max_tokens=512, endpoint=None):
             out = graph.invoke({"messages": [("user", task)]}, {"recursion_limit": 14})
         except Exception as e:
             raise RuntimeError(scrub(f"{type(e).__name__}: {e}", key)[:400]) from None
+        finally:
+            if http_client is not None:
+                http_client.close()
     return out["messages"][-1].content

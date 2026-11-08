@@ -17,20 +17,35 @@ import time
 BT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_events.bt")
 
 
-def program(dns_ports, ports=None, reduce_rtt=False):
-    """bpftrace program text. ports: restrict TCP events to these service ports (None = record all TCP).
-    reduce_rtt: drop RTT samples on pure ACKs unless srtt is already above 20 ms (about half the events)."""
+LIBC = "/lib/x86_64-linux-gnu/libc.so.6"
+
+
+def _read(name):
+    with open(os.path.join(os.path.dirname(BT_FILE), name)) as f:
+        return f.read()
+
+
+def program(dns_ports, ports=None, reduce_rtt=False, libc_dns=False, tcp_send=False):
+    """bpftrace program text.
+
+    ports: restrict TCP events to these service ports (None = record all TCP).
+    reduce_rtt: drop RTT samples on pure ACKs unless srtt is already above 20 ms (about half the events).
+    libc_dns: also time libc getaddrinfo() (DNS as the application sees it).
+    tcp_send: also record every tcp_sendmsg() on the watched ports, with pid/tid.
+    """
     dns_cond = " || ".join(f"$port == {int(p)}" for p in dns_ports)
     if ports:
         connect_cond = " || ".join(f"$port == {int(p)}" for p in ports)
         flow_cond = " || ".join(f"args->sport == {int(p)} || args->dport == {int(p)}" for p in ports)
+        send_cond = " || ".join(f"$sport == {int(p)} || $dport == {int(p)}" for p in ports)
     else:
-        connect_cond = flow_cond = "1"
+        connect_cond = flow_cond = send_cond = "1"
     rtt_cond = "args->data_len > 0 || args->srtt > 20000" if reduce_rtt else "1"
-    with open(BT_FILE) as f:
-        return (f.read().replace("@@DNS_COND@@", dns_cond)
-                .replace("@@CONNECT_COND@@", connect_cond).replace("@@FLOW_COND@@", flow_cond)
-                .replace("@@RTT_COND@@", rtt_cond))
+    gai = _read("probe_getaddrinfo.bt").replace("@@LIBC@@", LIBC) if libc_dns else ""
+    send = _read("probe_tcp_send.bt").replace("@@SEND_COND@@", send_cond) if tcp_send else ""
+    return (_read("net_events.bt").replace("@@GAI_PROBES@@", gai).replace("@@SEND_PROBE@@", send)
+            .replace("@@DNS_COND@@", dns_cond).replace("@@CONNECT_COND@@", connect_cond)
+            .replace("@@FLOW_COND@@", flow_cond).replace("@@RTT_COND@@", rtt_cond))
 
 
 def sync_clocks(samples=7):
@@ -50,6 +65,15 @@ def sync_clocks(samples=7):
     return best
 
 
+def _numeric(host):
+    import ipaddress
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
 def available():
     try:
         return subprocess.run(["sudo", "-n", "bpftrace", "--version"], capture_output=True).returncode == 0
@@ -59,7 +83,8 @@ def available():
 
 class KernelCollector:
     def __init__(self, dns_ports=(53,), start_timeout=30, sync_interval_s=0.1, ports=None,
-                 reduce_rtt=False):
+                 reduce_rtt=False, libc_dns=False, tcp_send=False):
+        self.libc_dns, self.tcp_send = libc_dns, tcp_send
         self.dns_ports = list(dns_ports)
         self.ports = list(ports) if ports else None   # TCP service ports to keep; None = all
         self.reduce_rtt = reduce_rtt
@@ -71,7 +96,7 @@ class KernelCollector:
 
     def __enter__(self):
         self._proc = subprocess.Popen(
-            ["sudo", "-n", "bpftrace", "-q", "-B", "none", "-e", program(self.dns_ports, self.ports, self.reduce_rtt)],
+            ["sudo", "-n", "bpftrace", "-q", "-B", "none", "-e", program(self.dns_ports, self.ports, self.reduce_rtt, self.libc_dns, self.tcp_send)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         self._ready = threading.Event()
         self._err = []
@@ -100,6 +125,8 @@ class KernelCollector:
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue  # partial line at shutdown
+            if ev.get("via") == "libc" and _numeric(ev.get("host", "")):
+                continue   # getaddrinfo("127.0.0.1"): not a lookup, drop it (the correlator pairs lookups with hostnames)
             if ev["ev"] == "ready":
                 self._ready.set()
             else:

@@ -1,0 +1,28 @@
+/*
+ * Optional probe: DNS lookups as the application sees them, measured around libc getaddrinfo().
+ * Spliced into net_events.bt by collectors/ebpf.py (@@LIBC@@ is the path of libc). Emits the same event names as the
+ * stub-resolver probe (dns_query / dns_response) with "via":"libc", so the correlator and the diagnosers need no change.
+ * Covers everything that resolves through libc (Python's socket, httpx, curl), cached answers included, because it
+ * times the call itself rather than the packets. pid/tid are exact.
+ */
+uprobe:@@LIBC@@:getaddrinfo
+{
+  @gai_t[tid] = nsecs;
+  @gai_h[tid] = str(arg0);
+  printf("{\"ev\":\"dns_query\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"comm\":\"%s\",\"via\":\"libc\",\"host\":\"%s\"}\n",
+         nsecs, pid, tid, comm, str(arg0));
+}
+
+uretprobe:@@LIBC@@:getaddrinfo
+/@gai_t[tid] != 0/
+{
+  printf("{\"ev\":\"dns_response\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"comm\":\"%s\",\"via\":\"libc\",\"host\":\"%s\",\"ret\":%d,\"lat_ns\":%llu}\n",
+         nsecs, pid, tid, comm, @gai_h[tid], retval, nsecs - @gai_t[tid]);
+  delete(@gai_t[tid]);
+  delete(@gai_h[tid]);
+}
+
+END {
+  clear(@gai_t);
+  clear(@gai_h);
+}

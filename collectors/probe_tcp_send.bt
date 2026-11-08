@@ -1,0 +1,17 @@
+/*
+ * Optional probe: every tcp_sendmsg() on the watched ports, with the sending thread's pid/tid and the connection's
+ * client/server ports. Spliced into net_events.bt by collectors/ebpf.py (@@SEND_COND@@ is the port filter).
+ * Why: kernel RTT samples (tcp_probe) carry no pid and only fire on receive, so (1) a reused keep-alive connection had no
+ * evidence at all (the connect happened in an earlier span) and (2) for a REMOTE server only the client end is visible, so
+ * "request sent -> first response byte" cannot be formed. A send carries pid/tid, which fixes both.
+ */
+kprobe:tcp_sendmsg
+{
+  $sk = (struct sock *)arg0;
+  $sport = $sk->__sk_common.skc_num;
+  $dport = ($sk->__sk_common.skc_dport >> 8) | (($sk->__sk_common.skc_dport & 0xff) << 8);
+  if (@@SEND_COND@@) {
+    printf("{\"ev\":\"tcp_send\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"sport\":%d,\"dport\":%d,\"bytes\":%d}\n",
+           nsecs, pid, tid, $sport, $dport, (int64)arg2);
+  }
+}
