@@ -33,14 +33,14 @@ EVAL_SPLIT, EVAL_SEED0 = "real", 8_000
 MOCK_CAL_SPLITS = ("hardcal", "fullcal")
 
 
-def collect(con, n, n_cal, force):
+def collect(con, n, n_cal, force, llm_kind="anthropic"):
     todo = [(CAL_SPLIT, "none", CAL_SEED0 + i) for i in range(n_cal)]
     todo += [(EVAL_SPLIT, f, EVAL_SEED0 + i) for f in FAULTS for i in range(n)]
     for k, (split, fault, seed) in enumerate(todo, 1):
         rid = f"{split}-{fault}-{seed}"
         if not force and store.run_exists(con, rid) and store.load_env(con, rid) is not None:
             continue
-        run_one(fault, seed, con, split, kernel=True, llm_kind="anthropic")
+        run_one(fault, seed, con, split, kernel=True, llm_kind=llm_kind)
         print(f"  {k}/{len(todo)} runs", file=sys.stderr, flush=True)
 
 
@@ -118,6 +118,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cal", type=int, default=12, help="healthy real-model runs for calibration")
     ap.add_argument("--n", type=int, default=8, help="runs per fault")
+    ap.add_argument("--llm-kind", default="anthropic", choices=["anthropic", "langgraph"],
+                    help="anthropic: our adapter for the Anthropic API; langgraph: the LangGraph agent against the "
+                         "OpenAI-compatible endpoint in the env file (OpenRouter / OpenCode)")
+    ap.add_argument("--price-in", type=float, default=0.10, help="$ per million input tokens, for the cost line")
+    ap.add_argument("--price-out", type=float, default=0.50, help="$ per million output tokens, for the cost line")
     ap.add_argument("--variants", nargs="+", default=["base", "v2"], choices=["base", "v2", "v3"])
     ap.add_argument("--db", default=None)
     ap.add_argument("--force", action="store_true")
@@ -125,15 +130,22 @@ def main():
     a = ap.parse_args()
     con = store.connect(a.db)
     if not a.no_record:
-        from agent.anthropic_llm import KEY_FILE, TOTAL, load_api_key
         if not bpf_available():
             sys.exit("needs passwordless sudo bpftrace: run scripts/setup_sudoers.sh once")
-        if not load_api_key():
-            sys.exit(f"no API key: set ANTHROPIC_API_KEY or put the key in {KEY_FILE} (chmod 600)")
-        collect(con, a.n, a.cal, a.force)
-        cost = TOTAL["input_tokens"] * 0.10 / 1e6 + TOTAL["output_tokens"] * 0.50 / 1e6
+        if a.llm_kind == "anthropic":
+            from agent.anthropic_llm import KEY_FILE, TOTAL, load_api_key
+            if not load_api_key():
+                sys.exit(f"no API key: set ANTHROPIC_API_KEY or put the key in {KEY_FILE} (chmod 600)")
+        else:
+            from agent.langgraph_agent import TOTAL, load_settings
+            key, base_url, model = load_settings()
+            if not key:
+                sys.exit("no API key: set CROSSTRACE_ENV_FILE or put OPENROUTER_API_KEY / OPENCODE_API_KEY in .env")
+            print(f"model endpoint: {base_url}  model: {model}", file=sys.stderr)
+        collect(con, a.n, a.cal, a.force, a.llm_kind)
+        cost = TOTAL["input_tokens"] * a.price_in / 1e6 + TOTAL["output_tokens"] * a.price_out / 1e6
         print(f"\nAPI use this session: {TOTAL['calls']} calls, {TOTAL['input_tokens']} input + "
-              f"{TOTAL['output_tokens']} output tokens, about ${cost:.3f} at claude-haiku-5-5 prices")
+              f"{TOTAL['output_tokens']} output tokens, about ${cost:.4f} at ${a.price_in}/${a.price_out} per million")
 
     vis = kernel_visibility(con)
     print("\nKERNEL VISIBILITY of HTTP spans (share of spans with the evidence attached)")

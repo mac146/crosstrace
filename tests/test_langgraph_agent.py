@@ -25,7 +25,8 @@ def test_settings_prefer_the_environment_over_the_env_file(monkeypatch, tmp_path
     envfile = tmp_path / ".env"
     envfile.write_text("OPENCODE_API_KEY=file-key\nOPENCODE_MODEL=file-model\nOPENCODE_BASE_URL=\n")
     monkeypatch.setattr(lg, "ENV_FILE", str(envfile))
-    for k in ("OPENCODE_API_KEY", "OPENCODE_MODEL", "OPENCODE_BASE_URL"):
+    for k in ("OPENCODE_API_KEY", "OPENCODE_MODEL", "OPENCODE_BASE_URL", "OPENROUTER_API_KEY", "CROSSTRACE_ENV_FILE",
+              "CROSSTRACE_MODEL"):
         monkeypatch.delenv(k, raising=False)
     assert lg.load_settings() == ("file-key", lg.DEFAULT_BASE_URL, "file-model")   # empty value falls back to default
     monkeypatch.setenv("OPENCODE_API_KEY", "env-key")
@@ -33,6 +34,18 @@ def test_settings_prefer_the_environment_over_the_env_file(monkeypatch, tmp_path
     monkeypatch.setattr(lg, "ENV_FILE", str(tmp_path / "missing"))
     monkeypatch.delenv("OPENCODE_API_KEY")
     assert lg.load_settings()[0] is None
+
+
+def test_openrouter_key_is_read_from_another_projects_env_file_and_its_model_is_ignored(monkeypatch, tmp_path):
+    other = tmp_path / "other.env"
+    other.write_text('OPENROUTER_API_KEY="or-key-123"\nOPENROUTER_MODEL=some/expensive-model\nOTHER=1\n')
+    for k in ("OPENCODE_API_KEY", "OPENCODE_MODEL", "OPENROUTER_API_KEY", "CROSSTRACE_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("CROSSTRACE_ENV_FILE", str(other))
+    key, url, model = lg.load_settings()
+    assert (key, url, model) == ("or-key-123", lg.OPENROUTER_URL, lg.OPENROUTER_MODEL)   # quotes stripped, model not used
+    monkeypatch.setenv("CROSSTRACE_MODEL", "chosen/model")
+    assert lg.load_settings()[2] == "chosen/model"
 
 
 def test_the_secret_file_is_git_ignored_and_not_tracked():

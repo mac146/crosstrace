@@ -25,10 +25,12 @@ from pydantic import Field  # noqa: E402
 
 DEFAULT_BASE_URL = "https://opencode.ai/inference/openai/v1"
 DEFAULT_MODEL = "glm-5.3-flash-free"
+OPENROUTER_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_MODEL = "z-ai/glm-5.3-flash"      # cheap, supports tools; ~$0.03 in / $0.08 out per million tokens
 ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 # running totals for the cost check printed by eval/real_langgraph.py
 TOTAL = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
-TOKEN_CAP = 600_000    # hard stop for one process: far above the planned use, a guard against a loop gone wrong
+TOKEN_CAP = 300_000    # hard stop for one process (about $0.03 at the planned model): a guard against a loop gone wrong
 
 SYSTEM = (
     "You are a customer-support assistant. Answer using the tools, calling ONE tool per turn. "
@@ -41,18 +43,28 @@ SYSTEM = (
 
 
 def load_settings():
-    """(api_key, base_url, model) from the environment, falling back to .env. Values are never printed."""
+    """(api_key, base_url, model) from the environment, falling back to an env file. Values are never printed.
+
+    The env file is CROSSTRACE_ENV_FILE if set (it can point at another project's .env, which is then read in place
+    and never copied), else this repo's .env. OPENROUTER_API_KEY wins over OPENCODE_API_KEY when both exist. The model
+    is CROSSTRACE_MODEL or a cheap default; another project's own OPENROUTER_MODEL is deliberately ignored, since it
+    may be an expensive one."""
     env = dict(os.environ)
-    if os.path.exists(ENV_FILE):
-        with open(ENV_FILE, encoding="utf-8") as f:
+    path = os.environ.get("CROSSTRACE_ENV_FILE") or ENV_FILE
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, _, v = line.partition("=")
-                    if v.strip() and not env.get(k):
-                        env[k] = v.strip()
+                    v = v.strip().strip("\"'")
+                    if v and not env.get(k):
+                        env[k] = v
+    if env.get("OPENROUTER_API_KEY"):
+        return (env["OPENROUTER_API_KEY"], env.get("OPENROUTER_BASE_URL") or OPENROUTER_URL,
+                env.get("CROSSTRACE_MODEL") or OPENROUTER_MODEL)
     return (env.get("OPENCODE_API_KEY"), env.get("OPENCODE_BASE_URL") or DEFAULT_BASE_URL,
-            env.get("OPENCODE_MODEL") or DEFAULT_MODEL)
+            env.get("CROSSTRACE_MODEL") or env.get("OPENCODE_MODEL") or DEFAULT_MODEL)
 
 
 def scrub(text, secret):
@@ -131,7 +143,7 @@ def run_langgraph(task, tools, tracing, max_tokens=512, endpoint=None):
         key, base_url, model = load_settings()
         retries = 0
     if not key:
-        raise RuntimeError("no OPENCODE_API_KEY in the environment or .env")
+        raise RuntimeError("no API key (OPENROUTER_API_KEY / OPENCODE_API_KEY) in the environment or the env file")
     llm = TracedChat(model=model, base_url=base_url, api_key=key, max_tokens=max_tokens, timeout=60,
                      max_retries=retries, tracing=tracing, secret=key)
     graph = create_react_agent(llm, build_tools(tools, tracing), prompt=SYSTEM)
