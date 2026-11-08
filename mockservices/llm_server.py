@@ -10,6 +10,7 @@ Fault hooks (off by default, used by faultlab in Stage 1):
 """
 import argparse
 import json
+import ssl
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -78,8 +79,13 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
-def make_server(port, delay_ms=0, rate_limit_first=0):
+def make_server(port, delay_ms=0, rate_limit_first=0, tls=None):
+    """tls=(cert_file, key_file) serves HTTPS, so the kernel sees an encrypted conversation (handshake records, TLS records)."""
     srv = Server(("127.0.0.1", port), Handler)
+    if tls:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(*tls)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     srv.cfg = {"delay_ms": delay_ms, "rate_limit_first": rate_limit_first,
                "count": 0, "lock": threading.Lock()}
     return srv
@@ -90,7 +96,9 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=8801)
     ap.add_argument("--delay-ms", type=int, default=0)
     ap.add_argument("--rate-limit-first", type=int, default=0)
+    ap.add_argument("--tls-cert", default=None)
+    ap.add_argument("--tls-key", default=None)
     a = ap.parse_args()
-    srv = make_server(a.port, a.delay_ms, a.rate_limit_first)
+    srv = make_server(a.port, a.delay_ms, a.rate_limit_first, (a.tls_cert, a.tls_key) if a.tls_cert else None)
     print("READY", flush=True)
     srv.serve_forever()

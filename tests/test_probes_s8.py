@@ -108,6 +108,19 @@ def test_remote_wait_on_a_first_call_is_not_fooled_by_a_large_client_hello():
     assert b["server_wait_ms"] == pytest.approx(4928.0)
 
 
+def test_a_tls13_session_ticket_after_the_request_is_not_mistaken_for_the_response():
+    from correlator.join import _client_first_byte_ms
+    s = http_span("A", 0, 400)
+    events = [
+        ev("tcp_send", 100, pid=10, tid=10, sport=52000, dport=443, bytes=900),    # the request
+        ev("tcp_rtt", 100.5, sport=52000, dport=443, bytes=250, srtt_us=100),      # NewSessionTicket, right after
+        ev("tcp_rtt", 368, sport=52000, dport=443, bytes=400, srtt_us=100),        # the response, after a 267 ms delay
+    ]
+    entry = next(iter(correlate([s], events, PAIRS).entries))
+    assert breakdown(entry)["server_wait_ms"] == pytest.approx(267.5)
+    assert _client_first_byte_ms([a.event for a in entry.kernel], 443) == pytest.approx(0.5)   # the superseded definition
+
+
 def test_loopback_server_wait_still_uses_the_server_side_events_when_present():
     s = http_span("A", 0, 400, port=8000, host="127.0.0.1")
     events = [

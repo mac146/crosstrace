@@ -166,8 +166,39 @@ def correlate(spans, kernel_events, clock_pairs, slack_ns=1_000_000, tail_ns=5_0
         by_thread.setdefault((a.get("process.pid"), a.get("thread.id")), []).append(e)
     thread_index = {k: _SpanIndex(v) for k, v in by_thread.items()}
 
+    # 0. spans that declare their socket (attribute network.local.port, an OpenTelemetry semantic convention): the strongest
+    #    evidence, and the only one that works when many requests share one pid and thread id (async agents on an event loop).
+    #    connect_end and sends carry the client port; connect_start has none yet, so it is paired with its connect_end through
+    #    the kernel socket pointer ("sk"). Spans without the attribute, and events without a match, fall through to step 1.
+    by_lport = {}
+    for e in http:
+        lp = e.span["attrs"].get("network.local.port")
+        if lp is not None:
+            by_lport.setdefault(lp, []).append(e)
+    if by_lport:
+        sk_ends = {}
+        for i, ev in enumerate(events):
+            if ev["ev"] in ("tcp_connect_end", "tcp_send"):
+                cands = [e for e in by_lport.get(ev.get("sport"), [])
+                         if e.span["attrs"]["server.port"] == ev.get("dport")]
+                owner = choose(cands, ev["wall_ns"]) if cands else None
+                if owner:
+                    attach(owner, i, "local-port")
+                    owners = flows.setdefault(pair(ev), [])
+                    if not any(o is owner for o in owners):
+                        owners.append(owner)
+                    if ev["ev"] == "tcp_connect_end" and ev.get("sk") is not None:
+                        sk_ends.setdefault(ev["sk"], []).append((ev["wall_ns"], owner))
+        for i, ev in enumerate(events):
+            if ev["ev"] == "tcp_connect_start" and ev.get("sk") in sk_ends and i not in claimed:
+                ends = [(t, o) for t, o in sk_ends[ev["sk"]] if 0 <= t - ev["wall_ns"] <= 130_000_000_000]
+                if ends:   # the first connect_end of this socket after the start (socket memory can be reused later)
+                    attach(min(ends, key=lambda x: x[0])[1], i, "local-port")
+
     # 1. exact PID/TID evidence
     for i, ev in enumerate(events):
+        if i in claimed:
+            continue
         if ev["ev"] in PID_DNS:   # a lookup belongs to a span that resolves a hostname
             def want(e):
                 return _is_hostname(e.span)
@@ -280,8 +311,10 @@ def _resp_gap_ms(events, server_port):
     return (first_resp - max(before)) / 1e6 if before else None
 
 
-def _client_wait_ms(events, server_port):
-    """Remote-server wait, from the client end only: the last send that has a response after it (the request: on a fresh
+def _client_first_byte_ms(events, server_port):
+    """SUPERSEDED by _client_wait_ms (kept for comparison in eval/remote_wait.py). Time from the request to the first payload
+    bytes after it; fooled by a TLS 1.3 session ticket that arrives right after the request.
+    Remote-server wait, from the client end only: the last send that has a response after it (the request: on a fresh
     connection the TLS handshake sends come before it, and a later send with nothing after it cannot be the request) ->
     the first payload bytes received after that send. Includes one round trip, so it is "time to first byte", not pure
     server time; calibrate its healthy threshold on the same path.
@@ -298,3 +331,22 @@ def _client_wait_ms(events, server_port):
         return None
     request_t = max(answered)
     return (min(r for r in recvs if r > request_t) - request_t) / 1e6
+
+
+def _client_wait_ms(events, server_port):
+    """Remote-server wait, from the client end only: the LONGEST SILENCE after the request. The request is the last send that
+    has any payload received after it (on a fresh connection the TLS handshake sends come first); the silence is the largest
+    gap between that send and the payload records that follow it. A server's delay is one long gap; a TLS 1.3 session ticket
+    arriving just after the request only splits off a tiny gap and no longer passes for the response (found by
+    eval/remote_wait.py: 2 of 48 calls measured 0 ms for a 268 ms delay with "first payload byte"). Includes one round trip.
+    For a streamed answer with a long pause in the middle this picks the longer of first-token latency and that pause."""
+    sends = [(e["wall_ns"], e.get("bytes", 0)) for e in events
+             if e["ev"] == "tcp_send" and e.get("dport") == server_port and e.get("bytes", 0) > 0]
+    recvs = sorted(e["wall_ns"] for e in events
+                   if e["ev"] == "tcp_rtt" and e.get("dport") == server_port and e.get("bytes"))
+    answered = [t for t, _ in sends if any(r > t for r in recvs)]
+    if not answered:
+        return None
+    request_t = max(answered)
+    times = [request_t] + [r for r in recvs if r > request_t]
+    return max(b - a for a, b in zip(times, times[1:])) / 1e6

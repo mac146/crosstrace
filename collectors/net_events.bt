@@ -57,8 +57,8 @@ kprobe:tcp_v4_connect
     @c_t[$sk] = nsecs;
     @o_pid[$sk] = pid;
     @o_tid[$sk] = tid;
-    printf("{\"ev\":\"tcp_connect_start\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"comm\":\"%s\",\"daddr\":\"%s\",\"dport\":%d}\n",
-           nsecs, pid, tid, comm, ntop($sa->sin_addr.s_addr), $port);
+    printf("{\"ev\":\"tcp_connect_start\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"comm\":\"%s\",\"daddr\":\"%s\",\"dport\":%d,\"sk\":%llu}\n",
+           nsecs, pid, tid, comm, ntop($sa->sin_addr.s_addr), $port, $sk);
   }
 }
 
@@ -67,9 +67,9 @@ tracepoint:sock:inet_sock_set_state
 /args->protocol == 6 && args->oldstate == 2 && args->newstate == 1 && @c_t[(uint64)args->skaddr] != 0/
 {
   $sk = (uint64)args->skaddr;
-  printf("{\"ev\":\"tcp_connect_end\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"saddr\":\"%s\",\"sport\":%d,\"daddr\":\"%s\",\"dport\":%d,\"lat_ns\":%llu}\n",
+  printf("{\"ev\":\"tcp_connect_end\",\"t\":%llu,\"pid\":%d,\"tid\":%d,\"saddr\":\"%s\",\"sport\":%d,\"daddr\":\"%s\",\"dport\":%d,\"lat_ns\":%llu,\"sk\":%llu}\n",
          nsecs, @o_pid[$sk], @o_tid[$sk], ntop(args->saddr), args->sport, ntop(args->daddr), args->dport,
-         nsecs - @c_t[$sk]);
+         nsecs - @c_t[$sk], $sk);
   delete(@c_t[$sk]);
 }
 

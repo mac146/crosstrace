@@ -22,16 +22,18 @@ from collectors.ebpf import available as bpf_available
 from correlator.join import _is_http, breakdown
 from correlator.load import load_timeline
 from diagnosers.common import dur_ms, root_span
-from eval.metrics import aggregate, score_run
+from eval.metrics import aggregate, aggregate_multi, score_multi, score_run
 from eval.real_model import calibrate
 from eval.run_full import pct
 from eval.run_hard import diagnose
 from faultlab.netem import available as tc_available
+from faultlab.faults import truth_faults
 from faultlab.real_path import REAL_FAULTS
 from faultlab.runner import run_one
 
 CAL_SEED0 = 930_000
 GROUPS = ["none", *REAL_FAULTS]
+COMBINED = ["dns_delay+net_latency", "dns_delay+packet_loss"]     # two real faults at once (different interfaces)
 
 
 def collect(con, a):
@@ -92,7 +94,19 @@ def report(a, results, profile, kprofile):
         f"{k}={v:.0f}" for k, v in sorted(kprofile.get("classes", {}).get("model", {}).items())))
     print(f"\n{'fault':<12}{'n':>3}  {'':5}{'top-1':<19}{'false-attr':<19}{'said none':>9}")
     for fault, (rows, excluded) in results.items():
+        multi = "+" in fault
         for v in a.variants:
+            if multi:    # two injected faults: "top-1" = first cause is one of them; "both" = both are the first two causes
+                sc = [score_multi(r["ranked"][v], truth_faults(fault)) for r in rows]
+                if not sc:
+                    continue
+                ag = aggregate_multi(sc)
+                first = f"{pct(ag['top1_in_truth'], ag['top1_in_truth_ci'])}"
+                both = f"both {pct(ag['all_in_topk'], ag['all_in_topk_ci'])}"
+                none = sum(r["ranked"][v][0] == "none" for r in rows) / len(rows)
+                print(f"{(fault if v == a.variants[0] else ''):<22}{(ag['n'] if v == a.variants[0] else ''):>3}  {v:<5}"
+                      f"{first:<19}{both:<26}{pct(ag['false_attr'], ag['false_attr_ci']):<19}{100 * none:5.0f}%")
+                continue
             sc = [score_run(r["ranked"][v], fault) for r in rows]
             if not sc:
                 continue
@@ -110,7 +124,8 @@ def report(a, results, profile, kprofile):
     for fault, (rows, _) in results.items():
         if not rows:
             continue
-        inj = med([next(iter({k: v for k, v in r["params"].items() if k != "applied"}.values()), None) for r in rows])
+        inj = med([v if isinstance(v, (int, float)) else None for v in
+                   (next(iter({k: v for k, v in r["params"].items() if k != "applied"}.values()), None) for r in rows)])
         unit = {"dns_delay": " ms", "net_latency": " ms", "packet_loss": " %"}.get(fault, "")
         spans = sum(r["model_spans"] for r in rows)
         ev = sum(r["with_evidence"] for r in rows)
@@ -128,7 +143,7 @@ def main():
     ap.add_argument("--cal-extra", default="", help="comma-separated already-recorded healthy splits added to calibration")
     ap.add_argument("--split", default="rf_a")
     ap.add_argument("--seed0", type=int, default=11_000)
-    ap.add_argument("--faults", nargs="+", default=GROUPS, choices=GROUPS)
+    ap.add_argument("--faults", nargs="+", default=GROUPS, choices=GROUPS + COMBINED)
     ap.add_argument("--variants", nargs="+", default=["base", "v3", "v4"], choices=["base", "v2", "v3", "v4", "v5"])
     ap.add_argument("--rule", default="coarse", choices=["coarse", "tight"])
     ap.add_argument("--price-in", type=float, default=0.034)

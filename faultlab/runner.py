@@ -68,7 +68,11 @@ def run_one(fault, seed, con, split="eval", kernel=False, magnitude="normal", ll
     # "langgraph-mock": the same LangGraph agent, pointed at the local mock model server (no key, no internet)
     # Real-network faults (dns_delay / net_latency / packet_loss on the REAL path to the real model server) exist only
     # for llm_kind="langgraph"; the local plan is then the healthy one and the fault is applied by faultlab.real_path.
-    real = llm_kind == "langgraph" and fault in REAL_FAULTS
+    parts = fault.split("+")      # "dns_delay+net_latency": two real faults at once (different interfaces)
+    real = llm_kind == "langgraph" and all(p in REAL_FAULTS for p in parts)
+    if real and (len(parts) > 2 or len(set(parts)) != len(parts) or {"net_latency", "packet_loss"} <= set(parts)):
+        raise ValueError(f"unsupported combination {fault!r}: at most two different real faults, and net_latency and "
+                         f"packet_loss both need the one qdisc of the default interface")
     plan = make_plan("none" if real else fault, seed, magnitude)
     run_id = f"{split}-{fault}-{seed}"
     status, error = "ok", None
@@ -97,13 +101,15 @@ def run_one(fault, seed, con, split="eval", kernel=False, magnitude="normal", ll
         else:
             llm = LLMClient(svc.llm_url, tracing)
         tools = Tools(db, svc.api_url, svc.dns_server, tracing, plan.slow_extra_ms, db_hook=db_hook)
-        real_params, target_ips, model_host = None, [], None
+        real_state, model_host = {}, None
         if real:
             from agent.langgraph_agent import load_settings
             from urllib.parse import urlparse
             model_host = urlparse(load_settings()[1]).hostname
-            fault_cm, real_params, target_ips = real_path_fault(fault, seed, model_host)
-            stack.enter_context(fault_cm)      # applied only now: after the collector is up, removed when the run ends
+            for part in parts:
+                fault_cm, prm, ips = real_path_fault(part, seed, model_host)
+                stack.enter_context(fault_cm)  # applied only now: after the collector is up, removed when the run ends
+                real_state[part] = (prm, ips)
         t_start = time.time_ns()
         try:
             if llm_kind in ("langgraph", "langgraph-mock"):
@@ -120,16 +126,21 @@ def run_one(fault, seed, con, split="eval", kernel=False, magnitude="normal", ll
     truth_target = plan.target
     if real:
         from diagnosers.common import COMPONENT
-        truth_params, truth_target = dict(real_params), COMPONENT[fault]
-        # was the fault really on the path that the run used? (CDN addresses can change between resolve and connect)
-        if fault == "dns_delay":
-            looked = [e for e in collector.events if e["ev"] == "dns_response" and e.get("via") == "libc"
-                      and e.get("host") == model_host] if collector else []
-            truth_params["applied"] = bool(looked) and max(e["lat_ns"] for e in looked) / 1e6 >= 0.5 * real_params["delay_ms"]
-        else:
-            connects = [e for e in collector.events if e["ev"] == "tcp_connect_end"
-                        and e.get("dport") == 443] if collector else []
-            truth_params["applied"] = bool(connects) and all(e["daddr"] in target_ips for e in connects)
+        truth_target = COMPONENT[parts[0]]
+        # was each fault really on the path that the run used? (CDN addresses can change between resolve and connect)
+        applied = True
+        for part, (prm, ips) in real_state.items():
+            if part == "dns_delay":
+                looked = [e for e in collector.events if e["ev"] == "dns_response" and e.get("via") == "libc"
+                          and e.get("host") == model_host] if collector else []
+                applied &= bool(looked) and max(e["lat_ns"] for e in looked) / 1e6 >= 0.5 * prm["delay_ms"]
+            else:
+                connects = [e for e in collector.events if e["ev"] == "tcp_connect_end"
+                            and e.get("dport") == 443] if collector else []
+                applied &= bool(connects) and all(e["daddr"] in ips for e in connects)
+        truth_params = dict(next(iter(real_state.values()))[0]) if len(parts) == 1 else \
+            {part: dict(prm) for part, (prm, _) in real_state.items()}
+        truth_params["applied"] = applied
     store.save_run(
         con,
         {"run_id": run_id, "fault_type": fault, "seed": seed, "split": split,
