@@ -82,7 +82,8 @@ needed (selective faults, concurrency). Related work (AgentSight, Beyla/OBI, RCA
 **Stage 14 (the strongest cheap baselines, selective faults).** With faults on different servers, per-destination metrics plus a per-request
 server wait tie the join (100% vs 100%); host-wide counters fail (0%); an OBI-style per-request duration alone (an emulation) names a slow server
 but no network cause. The join only wins when two different problems hit the same destination in one run (100% vs 0% for the best cheap baseline), a
-scenario I designed to discriminate, run sequentially on mocks, and not repeated under concurrency ([docs/results-stage14.md](docs/results-stage14.md)).
+scenario I designed to discriminate. The join held at 100% with 8 and 32 agents running at once and no lost events (lockstep threads on mocks)
+while the cheap baselines stayed at 0% ([docs/results-stage14.md](docs/results-stage14.md)).
 
 **How much to trust this**
 
