@@ -92,6 +92,11 @@ With its per-connection RTT statistics matched to calls by port and order, OBI c
 scenarios, while its Prometheus-style aggregates fail on mixed problems (0-5%); I did not test either against concurrency, where order matching
 cannot work and the join's advantage would have to show ([docs/results-stage15.md](docs/results-stage15.md)).
 
+**Stage 16 (concurrent agents in different conditions).** With 9 and 24 agents at once on one server, each in a different condition, order matching of OBI's
+evidence falls to 63-69% and host-wide counters to 45-61%, while our join (100%, 99.5%) and OBI matched exactly by the client's source port (100%, 99.5%)
+are equal. So the evidence does not need our collector; what our correlator adds is matching without the application declaring its socket
+([docs/results-stage16.md](docs/results-stage16.md)).
+
 **How much to trust this**
 
 * The network gain is close to built in by the design of the experiment: the baseline cannot separate those causes
