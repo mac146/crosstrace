@@ -40,7 +40,7 @@ LABEL = {"base": "spans only", "v3_asis": "v3, no declared port", "v3_declared":
          "pool": "host-wide", "obi_flows": "OBI, order matching", "obi_port": "OBI, exact port"}
 
 
-async def call(tracing, kind, n, port):
+async def call(tracing, kind, n, port, dns_server=None):
     """One HTTP GET from an asyncio client bound to the agent kind's source address; its span declares the local port (as network.local.port
     AND as the validation attribute) which the arms that must not see it strip afterwards."""
     attrs = {"http.request.method": "GET", "server.address": "api.mock.local", "server.port": port,
@@ -48,7 +48,11 @@ async def call(tracing, kind, n, port):
     with tracing.span("execute_tool http_api", {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "http_api"}):
         with tracing.span("GET", attrs, client=True) as span:
             ip = KIND_IP[kind]
-            reader, writer = await asyncio.open_connection("127.0.0.1", port, local_addr=(ip, 0) if ip else None)
+            host = "127.0.0.1"
+            if dns_server:
+                from agent.dns import resolve            # the same blocking stub lookup the Stage 16 agents did; here on the loop thread
+                host = resolve("api.mock.local", dns_server)
+            reader, writer = await asyncio.open_connection(host, port, local_addr=(ip, 0) if ip else None)
             lp = writer.get_extra_info("sockname")[1]
             span.set_attribute("network.local.port", lp)
             span.set_attribute("crosstrace.debug.local_port", lp)
@@ -62,7 +66,7 @@ async def call(tracing, kind, n, port):
             span.set_attribute("http.response.status_code", int(head.split()[1]) if head else 0)
 
 
-async def run_agents(kinds, port):
+async def run_agents(kinds, port, dns_server=None):
     n = len(kinds)
     start, end = asyncio.Barrier(n), asyncio.Barrier(n)
     tracers = [Tracing() for _ in kinds]
@@ -75,7 +79,7 @@ async def run_agents(kinds, port):
                 for i in range(1, 5):
                     await start.wait()
                     try:
-                        await call(tracing, kind, i, port)
+                        await call(tracing, kind, i, port, dns_server)
                     finally:
                         await end.wait()
         except Exception as e:
@@ -98,7 +102,7 @@ def one_run(n_agents, mixed, seed, obi):
             with contextlib.ExitStack() as stack:
                 if mixed:
                     stack.enter_context(Netem(None, delay_ms=lat_ms, addr=KIND_IP["N"]))
-                tracers, errors = asyncio.run(run_agents(kinds, svc.api_port))
+                tracers, errors = asyncio.run(run_agents(kinds, svc.api_port, svc.dns_server))
                 if mixed:
                     time.sleep(2 * lat_ms / 1000 + 0.1)        # let netem's queue drain before the qdisc goes (Stage 14 finding)
             time.sleep(0.2)

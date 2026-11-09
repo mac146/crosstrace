@@ -1,6 +1,6 @@
 # Stage 18 predictions: many concurrent real agents, a real model, a real network path (written BEFORE any code or run)
 
-Status: **pre-registered, not yet run.** Run it after Stage 17 and only after checking the model account's remaining budget; stop at the first sign of
+Status: **run; results in results-stage18.md.** (Originally: pre-registered before any code or run.) Run it after Stage 17 and only after checking the model account's remaining budget; stop at the first sign of
 account or rate-limit trouble (see "Stop rules").
 
 ## Why
