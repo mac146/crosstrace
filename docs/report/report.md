@@ -2,7 +2,7 @@
 
 # Does kernel-level tracing help diagnose slow AI agents? A pre-registered benchmark, with negative results
 
-**Author:** Mayank Kumar Singh (independent)  ·  **Code and data:** https://github.com/mac146/crosstrace (version: git tag `report-v1`)
+**Short blog version:** https://dev.to/032_mayank_d7cf900fa03d4b/i-tested-whether-ebpf-helps-diagnose-slow-ai-agents-i-wrote-my-predictions-first-and-got-many-f8h  ·  **Author:** Mayank Kumar Singh (independent)  ·  **Code and data:** https://github.com/mac146/crosstrace (version: git tag `report-v1`)
 
 ## Abstract
 

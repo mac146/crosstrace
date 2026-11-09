@@ -66,6 +66,8 @@ correct under load: 5,120 of 5,120 spans got exactly their own connection with u
 lost kernel events ([docs/results-stage9.md](docs/results-stage9.md)); async agents on one shared thread and real production
 load remain untested.
 
+**Short version:** a plain-language write-up of the whole study is on dev.to: https://dev.to/032_mayank_d7cf900fa03d4b/i-tested-whether-ebpf-helps-diagnose-slow-ai-agents-i-wrote-my-predictions-first-and-got-many-f8h (full report: `docs/report/report.md`, tag `report-v1`).
+
 **Stage 12 (the biggest gaps).** The missing connect events were a probe problem: the tracepoint was skipped when another BPF program
 ran on the same CPU, and an fentry hook saw every one of those connections, so it is now the default (0.1% missing became 0.004%).
 Packet loss on the real NAT'd path is still not separable from the network's own retransmits: a better-looking rule on the design

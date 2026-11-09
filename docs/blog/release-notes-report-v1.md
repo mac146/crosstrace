@@ -2,6 +2,8 @@
 
 A pre-registered, open benchmark for diagnosing slow AI-agent runs by joining agent traces with kernel-level (eBPF) network evidence, with the negative results kept in.
 
+**Short blog version:** https://dev.to/032_mayank_d7cf900fa03d4b/i-tested-whether-ebpf-helps-diagnose-slow-ai-agents-i-wrote-my-predictions-first-and-got-many-f8h
+
 **Read:** [docs/report/report.md](https://github.com/mac146/crosstrace/blob/report-v1/docs/report/report.md)
 
 **Headline results (all on mock services unless stated; details and limits in the report):**
