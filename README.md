@@ -100,6 +100,8 @@ are equal. So the evidence does not need our collector; what our correlator adds
 ([docs/results-stage16.md](docs/results-stage16.md)). The host-wide arms degrade with concurrency because one stray retransmit anywhere is pooled into
 every agent's evidence (confirmed by rescoring without it). Neither matching approach works on a stock stack without custom instrumentation.
 
+**Stages 17-18 (pre-registered follow-ups, now run).** Async agents on one thread: assigning calls to connections by start time and duration recovers 99.5-100% without any declared port (our join without it: 48-89%; OBI by order 70-82%), in a single-threaded scenario that favours time matching; three of my five predictions were wrong ([docs/results-stage17.md](docs/results-stage17.md)). Eight concurrent real agents on a real model and path: DNS 100% and latency 94% detected, 0/64 healthy false alarms, host-wide evidence equal, about USD 0.02 ([docs/results-stage18.md](docs/results-stage18.md)).
+
 **How much to trust this**
 
 * The network gain is close to built in by the design of the experiment: the baseline cannot separate those causes

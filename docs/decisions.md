@@ -225,3 +225,6 @@ Running log. Newest at the bottom. Each entry: decision, why.
   is kernel-level network evidence plus per-request server timing; the per-span join is needed for mixed-same-destination cases (and,
   untested, for concurrency). The latency-window harness waits for the netem queue to drain before removal (a qdisc teardown otherwise creates
   retransmits that look like loss).
+
+## D42. A matching method without a declared port (Stage 17)
+- `correlator/assign.py` assigns HTTP client spans to connections by optimal assignment on start time and duration and writes the port into the span; the unchanged join does the rest. It equalled the declared-port control in the async scenarios (the pre-registered condition that changes the Stage 16 conclusion). Limited to a case that favours time matching; to be tested with threads, processes and uneven waits.

@@ -1,6 +1,6 @@
 # Stage 17 predictions: async agents without a declared port (written BEFORE any code or run)
 
-Status: **pre-registered, not yet run.** Run it before Stage 18 (it needs no API spend and no real network).
+Status: **run; results in results-stage17.md.** (Originally: pre-registered before any code or run.) Run it before Stage 18 (it needs no API spend and no real network).
 
 ## Why
 Stage 11: async agents on one thread cannot be joined by process and thread id (0 of 1,280 spans correct at 64 coroutines); they can if each span declares
