@@ -15,14 +15,21 @@ import subprocess
 DEV = "lo"
 
 
-def tc_commands(port, delay_ms=0, loss_pct=0):
-    """Pure function: the tc invocations (without the leading `tc`) that set up the fault."""
+def tc_commands(port, delay_ms=0, loss_pct=0, addr=None):
+    """Pure function: the tc invocations (without the leading `tc`) that set up the fault.
+    addr (Stage 16): match traffic to or from this IPv4 address instead of a port (agents that differ by source address)."""
     netem = ["qdisc", "add", "dev", DEV, "parent", "1:1", "handle", "10:", "netem"]
     if delay_ms:
         netem += ["delay", f"{delay_ms}ms"]
     if loss_pct:
         netem += ["loss", f"{loss_pct}%"]
     cmds = [["qdisc", "add", "dev", DEV, "root", "handle", "1:", "prio"], netem]
+    if addr:
+        for field in ("src", "dst"):
+            cmds.append(["filter", "add", "dev", DEV, "protocol", "ip", "parent", "1:0", "prio", "1",
+                         "u32", "match", "ip", "protocol", "6", "0xff",
+                         "match", "ip", field, f"{addr}/32", "flowid", "1:1"])
+        return cmds
     for field in ("dport", "sport"):
         cmds.append(["filter", "add", "dev", DEV, "protocol", "ip", "parent", "1:0", "prio", "1",
                      "u32", "match", "ip", "protocol", "6", "0xff",
@@ -44,8 +51,8 @@ def available():
 
 
 class Netem:
-    def __init__(self, port, delay_ms=0, loss_pct=0):
-        self.cmds = tc_commands(port, delay_ms, loss_pct)
+    def __init__(self, port, delay_ms=0, loss_pct=0, addr=None):
+        self.cmds = tc_commands(port, delay_ms, loss_pct, addr)
 
     def __enter__(self):
         current = _tc(["qdisc", "show", "dev", DEV]).stdout

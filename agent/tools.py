@@ -20,13 +20,14 @@ def seed_db(path):
 
 
 class Tools:
-    def __init__(self, db_path, api_url, dns_server, tracing, slow_extra_ms=0, db_hook=None):
+    def __init__(self, db_path, api_url, dns_server, tracing, slow_extra_ms=0, db_hook=None, source_ip=None):
         self.db_path = db_path
         self.api_url = api_url
         self.dns_server = dns_server
         self.tracing = tracing
         self.slow_extra_ms = slow_extra_ms  # slow_tool fault hook
         self.db_hook = db_hook              # slow_db fault hook: called right before the first query connects
+        self.source_ip = source_ip          # bind the HTTP client to this local address (Stage 16: agents that differ by address)
 
     def db_query(self, sql):
         attrs = {"db.system.name": "sqlite", "db.query.text": sql}
@@ -47,7 +48,8 @@ class Tools:
             # DNS lookup, TCP connect and the request all happen inside this one span:
             # an app-level tracer has no separate view of them.
             ip = resolve(u.hostname, self.dns_server)
-            conn = http.client.HTTPConnection(ip, u.port, timeout=30)
+            conn = http.client.HTTPConnection(ip, u.port, timeout=30,
+                                              source_address=(self.source_ip, 0) if self.source_ip else None)
             try:
                 conn.request("GET", path, headers={"Host": u.hostname})
                 # validation-only ground truth for the Stage 3 join test; the correlator never reads it.

@@ -27,7 +27,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/shipping/"):
             cid = self.path.rsplit("/", 1)[1]
             # --slow-ids restricts the delay to some customers (selective fault, Stage 14); empty = every request, as before
-            if self.server.delay_ms and (not self.server.slow_ids or cid in self.server.slow_ids):
+            who = self.client_address[0]
+            # --slow-from (Stage 16): delay only the requests that come from these client addresses
+            if (self.server.delay_ms and (not self.server.slow_ids or cid in self.server.slow_ids)
+                    and (not self.server.slow_from or who in self.server.slow_from)):
                 time.sleep(self.server.delay_ms / 1000)
             return self._send(200, {"customer_id": cid, "status": "in_transit", "eta_days": 2})
         self._send(404, {"error": "not found"})
@@ -41,10 +44,11 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
-def make_server(port, delay_ms=0, slow_ids=()):
+def make_server(port, delay_ms=0, slow_ids=(), slow_from=()):
     srv = Server(("127.0.0.1", port), Handler)
     srv.delay_ms = delay_ms
     srv.slow_ids = set(slow_ids)
+    srv.slow_from = set(slow_from)
     return srv
 
 
@@ -53,7 +57,8 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=8802)
     ap.add_argument("--delay-ms", type=int, default=0)
     ap.add_argument("--slow-ids", default="", help="comma-separated customer ids that get the delay (default: all)")
+    ap.add_argument("--slow-from", default="", help="comma-separated client addresses that get the delay (default: all)")
     a = ap.parse_args()
-    srv = make_server(a.port, a.delay_ms, [x for x in a.slow_ids.split(",") if x])
+    srv = make_server(a.port, a.delay_ms, [x for x in a.slow_ids.split(",") if x], [x for x in a.slow_from.split(",") if x])
     print("READY", flush=True)
     srv.serve_forever()
