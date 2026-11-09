@@ -82,3 +82,19 @@ def test_more_calls_than_connections_assigns_each_connection_once():
     out, n, considered = declare_ports_by_assignment(spans, events, PAIRS)
     ports = [s["attrs"].get("network.local.port") for s in out]
     assert n == 2 and considered == 3 and len({p for p in ports if p}) == 2
+
+
+def test_weights_select_the_start_only_and_duration_only_costs():
+    # two calls starting at the same instant with different durations: duration separates them, start cannot
+    spans = [span("long", 100.0, 500), span("short", 100.0, 3)]
+    events = conn_events(1, 40001, 100.1, 3) + conn_events(2, 40002, 100.1, 500)
+    by_dur, _, _ = declare_ports_by_assignment(spans, events, PAIRS, weights=(0.0, 1.0))
+    got = {s["span_id"]: s["attrs"]["network.local.port"] for s in by_dur}
+    assert got == {"long": 40002, "short": 40001}
+    by_start, _, _ = declare_ports_by_assignment(spans, events, PAIRS, weights=(1.0, 0.0))     # a tie on start: any assignment is allowed
+    assert {s["attrs"]["network.local.port"] for s in by_start} == {40001, 40002}
+    # a call that waits before connecting: the combined cost still prefers the right connection when durations differ a lot
+    waiting = [span("w", 100.0, 520), span("n", 100.05, 3)]            # w started at 100.0 but connected at 100.4 after a wait
+    ev2 = conn_events(1, 40011, 100.4, 120) + conn_events(2, 40012, 100.1, 3)
+    out, _, _ = declare_ports_by_assignment(waiting, ev2, PAIRS)
+    assert {s["span_id"]: s["attrs"]["network.local.port"] for s in out} == {"w": 40011, "n": 40012}

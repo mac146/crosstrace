@@ -100,9 +100,11 @@ def connections(events, clock):
     return conns
 
 
-def declare_ports_by_assignment(spans, events, clock_pairs):
+def declare_ports_by_assignment(spans, events, clock_pairs, weights=(1.0, 1.0)):
     """Copy of `spans` where each HTTP client span without `network.local.port` that could be assigned to a connection carries the connection's
-    local port. Returns (new_spans, number_assigned, number_of_http_spans_considered)."""
+    local port. Returns (new_spans, number_assigned, number_of_http_spans_considered).
+    weights = (start, duration): (1, 1) is the pre-registered cost; (1, 0) and (0, 1) are the Stage 19 ablations (start time only, duration only)."""
+    ws, wd = weights
     clock = ClockMap(clock_pairs)
     conns = connections(events, clock)
     by_server = {}
@@ -117,7 +119,7 @@ def declare_ports_by_assignment(spans, events, clock_pairs):
     for port, ss in groups.items():
         cs = by_server[port]
         considered += len(ss)
-        cost = [[(abs(s["start_ns"] - c["start_ns"]) + abs((s["end_ns"] - s["start_ns"]) - (c["end_ns"] - c["start_ns"]))) / 1e6
+        cost = [[(ws * abs(s["start_ns"] - c["start_ns"]) + wd * abs((s["end_ns"] - s["start_ns"]) - (c["end_ns"] - c["start_ns"]))) / 1e6
                  for c in cs] for s in ss]
         if len(ss) <= len(cs):
             cols = hungarian(cost)

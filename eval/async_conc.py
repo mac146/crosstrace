@@ -35,18 +35,21 @@ from eval.selective_obi import LOG, OBI, Obi, parse_stats
 from faultlab.netem import Netem, available as tc_available
 from mockservices.launcher import services
 
+ASSIGN_WEIGHTS = {"assign": (1.0, 1.0), "assign_start": (1.0, 0.0), "assign_dur": (0.0, 1.0)}      # Stage 19 adds the two ablations
 ARMS = ["base", "v3_asis", "v3_declared", "v3_assign", "pool", "obi_flows", "obi_port"]
 LABEL = {"base": "spans only", "v3_asis": "v3, no declared port", "v3_declared": "v3 + declared port", "v3_assign": "v3 + assignment (new)",
          "pool": "host-wide", "obi_flows": "OBI, order matching", "obi_port": "OBI, exact port"}
 
 
-async def call(tracing, kind, n, port, dns_server=None):
+async def call(tracing, kind, n, port, dns_server=None, wait_ms=0.0):
     """One HTTP GET from an asyncio client bound to the agent kind's source address; its span declares the local port (as network.local.port
     AND as the validation attribute) which the arms that must not see it strip afterwards."""
     attrs = {"http.request.method": "GET", "server.address": "api.mock.local", "server.port": port,
              "url.full": f"http://api.mock.local:{port}/shipping/{n}"}
     with tracing.span("execute_tool http_api", {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "http_api"}):
         with tracing.span("GET", attrs, client=True) as span:
+            if wait_ms:
+                await asyncio.sleep(wait_ms / 1000)      # Stage 19: an uneven wait between starting the call and connecting (inside the span)
             ip = KIND_IP[kind]
             host = "127.0.0.1"
             if dns_server:
@@ -66,31 +69,31 @@ async def call(tracing, kind, n, port, dns_server=None):
             span.set_attribute("http.response.status_code", int(head.split()[1]) if head else 0)
 
 
-async def run_agents(kinds, port, dns_server=None):
+async def run_agents(kinds, port, dns_server=None, jitter_ms=0, seed=""):
     n = len(kinds)
     start, end = asyncio.Barrier(n), asyncio.Barrier(n)
     tracers = [Tracing() for _ in kinds]
     errors = []
 
-    async def agent(tracing, kind):
+    async def agent(tracing, kind, idx):
         try:
             with tracing.span("invoke_agent crosstrace-agent", {"gen_ai.operation.name": "invoke_agent",
                                                                "gen_ai.agent.name": "crosstrace-agent"}):
                 for i in range(1, 5):
                     await start.wait()
                     try:
-                        await call(tracing, kind, i, port, dns_server)
+                        await call(tracing, kind, i, port, dns_server, random.Random(f"{seed}:{idx}:{i}").uniform(0, jitter_ms) if jitter_ms else 0.0)
                     finally:
                         await end.wait()
         except Exception as e:
             errors.append(f"{type(e).__name__}: {e}")
             start.abort() if hasattr(start, "abort") else None
 
-    await asyncio.gather(*[agent(t, k) for t, k in zip(tracers, kinds)])
+    await asyncio.gather(*[agent(t, k, i) for i, (t, k) in enumerate(zip(tracers, kinds))])
     return tracers, errors
 
 
-def one_run(n_agents, mixed, seed, obi):
+def one_run(n_agents, mixed, seed, obi, jitter_ms=0):
     rng = random.Random(f"async:{n_agents}:{seed}")
     slow_ms, lat_ms = rng.randint(300, 1000), rng.randint(75, 250)
     api_args = ("--delay-ms", str(slow_ms), "--slow-from", KIND_IP["S"]) if mixed else ()
@@ -102,13 +105,13 @@ def one_run(n_agents, mixed, seed, obi):
             with contextlib.ExitStack() as stack:
                 if mixed:
                     stack.enter_context(Netem(None, delay_ms=lat_ms, addr=KIND_IP["N"]))
-                tracers, errors = asyncio.run(run_agents(kinds, svc.api_port, svc.dns_server))
+                tracers, errors = asyncio.run(run_agents(kinds, svc.api_port, svc.dns_server, jitter_ms, seed))
                 if mixed:
                     time.sleep(2 * lat_ms / 1000 + 0.1)        # let netem's queue drain before the qdisc goes (Stage 14 finding)
             time.sleep(0.2)
         return {"mixed": mixed, "kinds": kinds, "agents": [t.spans() for t in tracers], "events": k.events,
                 "sync": [list(c) for c in k.clock_sync], "warnings": k.warnings, "errors": errors, "ports": [svc.api_port],
-                "inject": {"slow_ms": slow_ms, "lat_ms": lat_ms}}
+                "inject": {"slow_ms": slow_ms, "lat_ms": lat_ms}, "jitter_ms": jitter_ms}
 
 
 def record(path, plan):
@@ -143,9 +146,9 @@ def join_views(r, mode):
     info = None
     if mode == "asis":
         all_spans = strip_declared(all_spans)
-    elif mode == "assign":
+    elif mode in ASSIGN_WEIGHTS:
         all_spans, assigned, considered = declare_ports_by_assignment(strip_declared(all_spans), r["events"],
-                                                                     [tuple(c) for c in r["sync"]])
+                                                                     [tuple(c) for c in r["sync"]], ASSIGN_WEIGHTS[mode])
         info = (assigned, considered)
     tl = correlate(all_spans, r["events"], [tuple(c) for c in r["sync"]])
     per_agent = []
