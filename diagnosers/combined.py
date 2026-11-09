@@ -104,7 +104,7 @@ def pooled(bds_by_span):
 
 
 def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, slow_api=False,
-             latent_baseline=False, run_level=False, source="joined", pool_entries=None, obi_waits=None, obi_srtts=None):
+             latent_baseline=False, run_level=False, source="joined", pool_entries=None, obi_waits=None, obi_srtts=None, run_view=None):
     """source (Stage 14 adds "pooled_port" and "obi"): "joined" (default, each step's own kernel events), "pooled" (run-wide host-metric numbers for every step, no
     server wait) or "pooled_wait" (as pooled plus the run's maximum server wait: an upper bound on a metrics stack).
 
@@ -162,7 +162,8 @@ def diagnose(timeline, profile, kprofile, tie_seed=0, loss_explains_rtt=False, s
     run_findings = False
     if run_level:
         thr = kprofile.get("classes", {}).get("model", {})
-        s = run_summary(http_by_class(timeline)["model"])
+        # run_view (Stage 18): the run-level evidence is taken from this view (all agents of a host) instead of this agent's own timeline
+        s = run_summary(http_by_class(run_view if run_view is not None else timeline)["model"])
         if s["dns_ms"] is not None and "dns_ms" in thr and s["dns_ms"] > thr["dns_ms"]:
             add("dns_delay", s["dns_ms"], f"DNS lookup on the model connection took {s['dns_ms']:.0f}ms "
                 f"(healthy threshold {thr['dns_ms']:.0f}ms)")
