@@ -2,7 +2,7 @@
 
 # Does kernel-level tracing help diagnose slow AI agents? A pre-registered benchmark, with negative results
 
-**Author:** Mayank Kumar Singh (independent)  ·  **Code and data:** https://github.com/mac146/crosstrace (commit: TODO, fill in the hash of the final commit this report describes)
+**Author:** Mayank Kumar Singh (independent)  ·  **Code and data:** https://github.com/mac146/crosstrace (version: git tag `report-v1`)
 
 ## Abstract
 
@@ -174,7 +174,8 @@ Intervals at n = 20 are 100% = [84, 100] and 0% = [0, 16]; healthy runs: 20/20 "
 - Fault parameters, tie-breaks and run order are seeded and repeat exactly; timings do not, so percentages move by a few points between runs (README "Reproducibility"). Healthy-duration thresholds are rebuilt from fresh calibration runs each time.
 - `make reproduce` (root, about 40 minutes, idle machine) records both evaluation sets and the overhead benchmark from an empty database; the other harnesses have their own commands in the Makefile and in each stage document (`python -m eval.selective --n 20 --cal 30`, `python -m eval.selective_conc --agents 1 8 32`). TODO: confirm whether `make reproduce` covers the Stage 13-14 results or add targets for them.
 - Every stage from 6 on has `docs/predictions-stage*.md` committed to git **before** its runs, with "I would be wrong if" conditions, and each results document scores them.
-- Tests: 260 passed, 1 skipped at the last full run (TODO: refresh at the final commit); live eBPF tests need `scripts/setup_sudoers.sh`.
+- Tests: 264 passed, 1 skipped at the last full run before the `report-v1` tag; live eBPF tests need `scripts/setup_sudoers.sh`.
+- Pre-registered follow-ups, committed before being run: `docs/predictions-stage17.md` (async agents without a declared port: assignment by time and duration) and `docs/predictions-stage18.md` (8 concurrent real agents, a real model, a real network path, with stop rules). Their results will be reported whichever way they go.
 - The real-model runs cost a few cents in total (TODO: sum the exact figure); the API key was kept outside the repository (`.env`, git-ignored). Those runs cannot be reproduced without your own model access.
 
 ## Appendix: decision log
@@ -184,7 +185,6 @@ Intervals at n = 20 are 100% = [84, 100] and 0% = [0, 16]; healthy runs: 20/20 "
 ---
 
 ## Open TODOs
-- Commit hash of the final version (author and repository URL are filled in), refreshed test count.
 - Author review: read every limit and headline claim once; the assistant's pass could not judge what a skeptical reader would question.
 - State which commit froze the v1 rules (Stages 1-4 have no predictions files).
 - Confirm `make reproduce` coverage of Stages 13-14.
