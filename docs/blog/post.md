@@ -34,6 +34,6 @@ Mock services on loopback, one host, scenarios I designed to discriminate, one O
 
 ## What's next
 
-Two experiments are pre-registered but not run: whether async agents can be matched without a declared port, and whether the results hold with 8 concurrent real agents on a real model and network. And a question for you: **if you run agents in production, how often are slow or failing runs network or infrastructure problems rather than model or tool problems?** Your last two or three slow-run incidents, anonymized, would help me more than any benchmark row.
+Two follow-ups were pre-registered and are now run (all predictions and results are in the repo): (1) async agents on one thread: assigning calls to connections by start time and duration worked without a declared port (99.5-100%) when calls start in order, but broke down with uneven waits before connecting (gap against a declared port 0, 4, 17 and 21 points at waits of 0, 50, 200 and 500 ms), so declaring the local port is the dependable route; (2) 8 concurrent real agents on a real model and network path: DNS delay detected in 100% and latency in 94% of agent-runs with no false alarms, about USD 0.02. And a question for you: **if you run agents in production, how often are slow or failing runs network or infrastructure problems rather than model or tool problems?** Your last two or three slow-run incidents, anonymized, would help me more than any benchmark row.
 
 Code, benchmark, predictions and the full report: https://github.com/mac146/crosstrace

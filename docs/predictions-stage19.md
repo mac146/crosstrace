@@ -1,5 +1,7 @@
 # Stage 19 predictions: does assignment-by-time survive uneven waits before connecting? (written BEFORE any code or run)
 
+Status: **run; results in results-stage19.md** (one plumbing smoke test was run first, contrary to the "no throwaway runs" line below; disclosed there).
+
 ## Why
 Stage 17: matching async agents' calls to connections by optimal assignment on start time and duration recovered 99.5-100% without any declared port. I flagged the main caveat: in one
 asyncio loop the coroutines start their calls in a fixed order and the kernel's connects follow in the same order, so start time alone orders the calls. That is the easy case. Real async

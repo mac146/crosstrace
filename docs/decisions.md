@@ -228,3 +228,6 @@ Running log. Newest at the bottom. Each entry: decision, why.
 
 ## D42. A matching method without a declared port (Stage 17)
 - `correlator/assign.py` assigns HTTP client spans to connections by optimal assignment on start time and duration and writes the port into the span; the unchanged join does the rest. It equalled the declared-port control in the async scenarios (the pre-registered condition that changes the Stage 16 conclusion). Limited to a case that favours time matching; to be tested with threads, processes and uneven waits.
+
+## D43. The assignment matcher's claim was narrowed after Stage 19
+- With uneven waits before connecting (0, 50, 200, 500 ms) the assignment's diagnosis gap against a declared port was 0, 3.6, 17.2 and 20.8 points. The README and report now say it works for ordered starts and small waits only, and recommend declaring the local port otherwise. One plumbing smoke test was run against the pre-registration and is disclosed.
