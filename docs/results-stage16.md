@@ -27,8 +27,7 @@ Intervals treat agent-runs as independent, which they are not (agents of one run
 ## Predictions against results
 - 12 (v3 at least 90%; healthy false alarms at most 5%): **held** (100% and 99.5%; kind H false alarms 0/36 and 1/64).
 - 13 (pooled arms 55-75%, kind S at most 20%): **half wrong**. 61.1% at C = 9, but **45.3% at C = 24**, below the range; kind S was 0% as predicted, and kind N fell
-  from 83% to 37.5%. I did not work out why kind N degrades with more agents (untested explanations: more host-wide noise in the pooled maxima, or the healthy
-  thresholds rising with load).
+  from 83% to 37.5%. I did not work out at first why kind N degrades with more agents; the follow-up below found it (stray retransmits in other agents' connections, confirmed by intervention).
 - 14 (order matching at least 15 points below v3): **held** (30.6 and 36.5 points below).
 - 15 (exact port matching at least 90%): **held** (100% and 99.5%). The joint belief that 14 and 15 both hold (50%) also held.
 - Neither "I would be wrong" condition was triggered.
@@ -50,3 +49,21 @@ Intervals treat agent-runs as independent, which they are not (agents of one run
 Same family of limits as Stages 14-15: mock services on loopback, one OBI version and configuration, `print_stats` output parsed by regular expression,
 scenario designed to discriminate (agents differ by source address, which real fleets do not necessarily do), lockstep agents as threads of one process,
 n = 12 and 8 runs. Not tested: retransmits and packet loss, DNS, async agents with OBI, agents in separate processes or containers, a real provider.
+
+## Follow-up: the two open items from this stage (post hoc: explanations sought AFTER seeing the results; analysis of the recorded runs, no new runs)
+**1. Why the host-wide (pooled) arm got worse with more agents: stray retransmits in OTHER agents' connections.** For kind N the pooled arm's first cause was
+`packet_loss` in 6/36 agents at C = 9 and 40/64 at C = 24. The pooled evidence sums retransmits over every agent's connections, and the rules say "retransmits
+explain a high RTT", so one retransmit anywhere in the run turns every network-delayed agent's diagnosis into packet loss. How often that happens grows with
+the number of connections pooled: at C = 9, 2 of 12 runs had at least one retransmit (2 of 432 calls, both on kind S); at C = 24, 5 of 8 runs (6 of 768 calls: 5 kind S,
+1 kind H). **Intervention:** rescoring the pooled arm with the pooled retransmit count set to zero gives kind N 36/36 (C = 9) and 64/64 (C = 24), so this
+mechanism accounts for the whole drop (it is not DNS: the pooled maximum lookup stayed at 5-25 ms). (`python -m eval.pooled_retx_check`.) The same stray retransmit
+is the likely cause of the single kind-H false alarm of `v3` at C = 24 (the latent-loss rule fires on a retransmit on that agent's own connection; not separately
+verified). So host-wide evidence degrades with concurrency for a mechanical reason, while per-call evidence (our join, or OBI matched exactly) does not.
+
+**2. How realistic is "the span declares its local port"?** `network.local.port` exists in the OpenTelemetry semantic conventions (opt-in, in the
+installed semantic-conventions package). I searched, as text and without installing or running them, the source of the OpenTelemetry Python instrumentations
+for requests, httpx, urllib3 and aiohttp-client (version 0.66b2): **none mentions `network.local.port` or reads the socket's local address** (they set server and peer
+ports only). A text search of those four wheels is not conclusive (shared helper packages were not searched), but it means `obi_real+port` should be read as "OBI
+plus custom instrumentation that I added by hand", not as something a team gets by default. Our join is not zero-configuration either: it needs `process.pid` and
+`thread.id` on the spans (our tracer adds them; I did not verify whether standard Python SDK setups do) and a thread-per-call agent. Neither approach works out of
+the box on a stock stack, which is a limit of the whole direction, not only of ours.
