@@ -93,6 +93,29 @@ eval-remote-wait:
 eval-churn:
 	$(PYTHON) -m eval.concurrency --configs 16x32 --total 15000
 
+# --- Stages 14-19 (ROOT). Each writes its recorded runs to ~/.crosstrace-data/*.json and re-scores them; add --no-record to only re-score.
+# eval-obi, eval-obi-conc, eval-async-conc and eval-async-jitter need OpenTelemetry eBPF Instrumentation installed by scripts/setup_sudoers.sh
+# (see docs/results-stage15.md for the version, the checksum and the configuration it needed). eval-real-conc needs CROSSTRACE_ENV_FILE and
+# `make venv-real`, and costs about two cents of model calls (see docs/predictions-stage18.md for its stop rules).
+# Stage 13 (host-wide pooled arms) re-scores runs recorded earlier: see the commands at the top of docs/results-stage13.md.
+.PHONY: eval-selective eval-selective-conc eval-obi eval-obi-conc eval-async-conc eval-async-jitter eval-real-conc eval-pooled-retx
+eval-selective:
+	$(PYTHON) -m eval.selective --n 20 --cal 30
+eval-selective-conc:
+	$(PYTHON) -m eval.selective_conc --agents 1 8 32
+eval-obi:
+	$(PYTHON) -m eval.selective_obi --n 20 --cal 30
+eval-obi-conc:
+	$(PYTHON) -m eval.obi_conc
+eval-async-conc:
+	$(PYTHON) -m eval.async_conc
+eval-async-jitter:
+	$(PYTHON) -m eval.async_jitter
+eval-real-conc:
+	$(PYTHON) -m eval.real_conc
+eval-pooled-retx:
+	$(PYTHON) -m eval.pooled_retx_check
+
 # --- The whole experiment from an empty database, one command (ROOT, about 40 minutes, keep the machine idle). ---
 # Fault parameters are seeded and reproduce exactly; timings and therefore exact percentages vary a little from
 # run to run (see README, "Reproducibility"). The full report is also saved to $(REPRO_DIR)/report.txt.

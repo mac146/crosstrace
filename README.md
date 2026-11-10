@@ -184,7 +184,7 @@ git clone <this repo> && cd crosstrace
 make -C collectors/ctrace        # optional: build the compiled collector (into ~/.crosstrace-build)
 ./scripts/setup_sudoers.sh       # ROOT, once (rerun after rebuilding): passwordless sudo for tc, bpftrace and the compiled collector. READ THE WARNING BELOW
 make venv                        # pinned dependencies (requirements-dev.txt)
-make test                        # 252 tests; live eBPF tests are skipped if the collectors are not usable
+make test                        # 278 tests (+1 skipped); live eBPF tests are skipped if the collectors are not usable
 make reproduce                   # ROOT, ~40 min, keep the machine idle: both evaluation sets + overhead
 ```
 
@@ -213,7 +213,7 @@ agent/        target agent, tools, OTel tracing, DNS client      collectors/   b
 mockservices/ mock LLM, API and DNS servers                      correlator/   clock alignment, join, integrity checks, renderer
 faultlab/     fault catalog, tc netem controller, run harness    diagnosers/   baseline, combined, healthy-profile thresholds
 eval/         metrics, evaluation runners, overhead benchmark    scripts/      feasibility check, sudoers setup, healthy demo
-tests/        252 tests (join, diagnosers, metrics, live eBPF)   docs/         decisions.md (D1-D39), results-stage1..12.md
+tests/        278 tests (join, diagnosers, metrics, live eBPF)   docs/         decisions.md (D1-D43), results-stage1..19.md
 ```
 
 `docs/decisions.md` records every design decision and why, including the ones that were changed after results came in.

@@ -8,3 +8,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# temporary helper scripts (never commit: they can contain local paths)
+scripts/_*
