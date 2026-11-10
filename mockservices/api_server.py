@@ -44,11 +44,13 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
-def make_server(port, delay_ms=0, slow_ids=(), slow_from=()):
+def make_server(port, delay_ms=0, slow_ids=(), slow_from=(), keepalive=False):
     srv = Server(("127.0.0.1", port), Handler)
     srv.delay_ms = delay_ms
     srv.slow_ids = set(slow_ids)
     srv.slow_from = set(slow_from)
+    # keepalive (Stage 20): HTTP/1.1 so a client can reuse one connection for several requests; the default HTTP/1.0 closes after every reply
+    Handler.protocol_version = "HTTP/1.1" if keepalive else "HTTP/1.0"
     return srv
 
 
@@ -57,8 +59,9 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=8802)
     ap.add_argument("--delay-ms", type=int, default=0)
     ap.add_argument("--slow-ids", default="", help="comma-separated customer ids that get the delay (default: all)")
+    ap.add_argument("--keepalive", action="store_true", help="HTTP/1.1: keep the connection open between requests")
     ap.add_argument("--slow-from", default="", help="comma-separated client addresses that get the delay (default: all)")
     a = ap.parse_args()
-    srv = make_server(a.port, a.delay_ms, [x for x in a.slow_ids.split(",") if x], [x for x in a.slow_from.split(",") if x])
+    srv = make_server(a.port, a.delay_ms, [x for x in a.slow_ids.split(",") if x], [x for x in a.slow_from.split(",") if x], a.keepalive)
     print("READY", flush=True)
     srv.serve_forever()
