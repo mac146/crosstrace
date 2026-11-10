@@ -231,3 +231,6 @@ Running log. Newest at the bottom. Each entry: decision, why.
 
 ## D43. The assignment matcher's claim was narrowed after Stage 19
 - With uneven waits before connecting (0, 50, 200, 500 ms) the assignment's diagnosis gap against a declared port was 0, 3.6, 17.2 and 20.8 points. The README and report now say it works for ordered starts and small waits only, and recommend declaring the local port otherwise. One plumbing smoke test was run against the pre-registration and is disclosed.
+
+## D44. The claim about order-matched OBI was narrowed after Stage 20
+- Order matching of OBI's evidence reached 96-97% with unsynchronised agents and a new connection per call (the pre-registered 'wrong if' condition), and 67% with reused connections. The report and README now say the Stage 16 breakdown is specific to lockstep scenarios, and that explicit correlation clearly wins only when connections are reused.

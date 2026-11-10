@@ -1,5 +1,7 @@
 # Stage 20 predictions: our join vs real OBI under interleaved, reused-connection concurrency, with overhead (written BEFORE any code or run)
 
+Status: **run; results in results-stage20.md.**
+
 ## Question (from the proposal for this stage)
 Does explicit kernel-to-span correlation outperform OBI's available telemetry when request order can no longer reliably identify which connection belongs to which operation?
 

@@ -98,7 +98,7 @@ eval-churn:
 # (see docs/results-stage15.md for the version, the checksum and the configuration it needed). eval-real-conc needs CROSSTRACE_ENV_FILE and
 # `make venv-real`, and costs about two cents of model calls (see docs/predictions-stage18.md for its stop rules).
 # Stage 13 (host-wide pooled arms) re-scores runs recorded earlier: see the commands at the top of docs/results-stage13.md.
-.PHONY: eval-selective eval-selective-conc eval-obi eval-obi-conc eval-async-conc eval-async-jitter eval-real-conc eval-pooled-retx
+.PHONY: eval-selective eval-selective-conc eval-obi eval-obi-conc eval-async-conc eval-async-jitter eval-real-conc eval-pooled-retx eval-obi-vs-join
 eval-selective:
 	$(PYTHON) -m eval.selective --n 20 --cal 30
 eval-selective-conc:
@@ -115,6 +115,8 @@ eval-real-conc:
 	$(PYTHON) -m eval.real_conc
 eval-pooled-retx:
 	$(PYTHON) -m eval.pooled_retx_check
+eval-obi-vs-join:
+	$(PYTHON) -m eval.obi_vs_join
 
 # --- The whole experiment from an empty database, one command (ROOT, about 40 minutes, keep the machine idle). ---
 # Fault parameters are seeded and reproduce exactly; timings and therefore exact percentages vary a little from
