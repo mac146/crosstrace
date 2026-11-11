@@ -16,7 +16,7 @@ def keep_headers(headers):
 
 @dataclass
 class Exchange:
-    idx: int                       # order of arrival in the recorded run
+    idx: int                       # position in the recording: 0..n-1 in order of arrival (failed upstream attempts are not exchanges)
     path: str
     provider: str
     key: str
@@ -38,9 +38,24 @@ class Recording:
     version: int = FORMAT_VERSION
     meta: dict = field(default_factory=dict)
 
+    def __post_init__(self):
+        # Exchange.idx is the address every fault, trial and verdict uses, so it must equal the list position. While recording it
+        # starts as the arrival number, which has gaps when an upstream attempt failed (that attempt is not kept); renumber.
+        self._arrival = [e.idx for e in self.exchanges]
+        self._renumber()
+
+    def _renumber(self):
+        order = sorted(range(len(self.exchanges)), key=lambda i: self._arrival[i])
+        self.exchanges = [self.exchanges[i] for i in order]
+        self._arrival = [self._arrival[i] for i in order]
+        for i, e in enumerate(self.exchanges):
+            e.idx = i
+
     def add(self, ex):
+        """Add an exchange whose idx is its arrival number (exchanges complete out of order when the agent calls concurrently)."""
         self.exchanges.append(ex)
-        self.exchanges.sort(key=lambda e: e.idx)
+        self._arrival.append(ex.idx)
+        self._renumber()
 
     def save(self, path):
         with open(path, "w", encoding="utf-8") as f:

@@ -173,6 +173,55 @@ def test_user_masks():
     assert k1 == k2
 
 
+def test_exchange_numbers_have_no_gaps_and_failed_upstream_attempts_are_not_recorded(tmp_path):
+    """Seen on a real run: the first upstream attempt failed, the SDK retried. The failed attempt is noted, not recorded, and the
+    exchanges are numbered 0..n-1 (every trial addresses exchanges by number)."""
+    import http.server
+    import threading
+    import httpx
+    calls = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            calls.append(1)
+            code, body = (500, b'{"error":{"message":"boom"}}') if len(calls) == 1 else (200, b'{"choices":[{"message":{"content":"ok"}}]}')
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        body = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+        with ProxyThread(mode="record", upstreams={"openai": f"http://127.0.0.1:{srv.server_address[1]}"}) as p:
+            assert httpx.post(p.base_url + "/v1/chat/completions", json=body).status_code == 500
+            assert httpx.post(p.base_url + "/v1/chat/completions", json=body).status_code == 200
+            assert httpx.post(p.base_url + "/v1/chat/completions", json={**body, "messages": body["messages"] * 2}).status_code == 200
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    rec = p.recording
+    assert [e.idx for e in rec.exchanges] == [0, 1] and all(e.status == 200 for e in rec.exchanges)
+    assert rec.meta["upstream_failures"] == [{"path": "/v1/chat/completions", "error": "HTTP 500"}]
+    rec.save(tmp_path / "r.json")
+    assert [e.idx for e in Recording.load(tmp_path / "r.json").exchanges] == [0, 1]
+
+
+def test_recordings_with_gaps_are_renumbered_on_load(tmp_path):
+    rec = Recording(exchanges=[])
+    from crosstrace.proxy.recording import Exchange
+    for i in (2, 1):           # completes out of order, with a gap where a failed attempt was
+        rec.add(Exchange(idx=i, path="/v1/chat/completions", provider="openai", key=str(i), state_key=str(i), request={}, status=200,
+                         headers=[], stream=False, body="{}"))
+    assert [(e.idx, e.key) for e in rec.exchanges] == [(0, "1"), (1, "2")]
+
+
 def test_session_matches_out_of_order_for_concurrent_calls():
     from crosstrace.proxy.recording import Exchange
     rec = Recording(exchanges=[Exchange(idx=i, path="/v1/messages", provider="anthropic", key=k, state_key=k, request={}, status=200,

@@ -30,7 +30,8 @@ class AgentSpec:
 
     def environ(self, base_url, replay):
         env = {k: v for k, v in os.environ.items() if k not in STRIP_ENV}
-        env.update(self.env)
+        # "{proxy_url}" in a configured value: for agents that read their base URL from their own variable (e.g. OPENCODE_BASE_URL)
+        env.update({k: v.replace("{proxy_url}", base_url) for k, v in self.env.items()})
         env.update(OPENAI_BASE_URL=base_url + "/v1", ANTHROPIC_BASE_URL=base_url)
         if replay:      # replay needs no real key (nothing leaves the machine), but SDKs refuse to start without one
             env.update(OPENAI_API_KEY="sk-crosstrace-replay", ANTHROPIC_API_KEY="sk-ant-crosstrace-replay")

@@ -128,6 +128,26 @@ def test_tool_args_cut_leaves_invalid_json_arguments(recordings, kind):
     assert not any(is_terminal(e) for e in evs)
 
 
+def test_tool_args_cut_cuts_inside_arguments_sent_in_one_piece():
+    """Real models (seen on OpenRouter) often send the whole arguments in one event. The cut must still truncate them, not just drop
+    finish_reason (which would make it a stream_cut_clean and the verdict misleading)."""
+    from crosstrace.proxy.recording import Exchange, Recording
+    chunk = lambda delta, fin=None: "data: " + json.dumps({"choices": [{"index": 0, "delta": delta, "finish_reason": fin}]})
+    events = [chunk({"role": "assistant", "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "get_order", "arguments": ""}}]}),
+              chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"order_id":42}'}}]}),
+              chunk({}, "tool_calls"), "data: [DONE]"]
+    path, body = REQ["openai_tool"]
+    from crosstrace.proxy.providers import request_keys
+    key, state_key, norm = request_keys(path, body, [])
+    rec = Recording(exchanges=[Exchange(idx=0, path=path, provider="openai", key=key, state_key=state_key, request=norm, status=200,
+                                        headers=[["content-type", "text/event-stream"]], stream=True, events=events)])
+    with ProxyThread(mode="replay", recording=rec, faults=FaultPlan(make_fault("tool_args_cut"), at=0)) as p:
+        r = raw_post(p.port, path, body)
+    evs = events_of(r["bytes"])
+    args = "".join(parse_event(e)[2]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] for e in evs if is_tool_arg(e))
+    assert args == '{"order' and not any(is_terminal(e) for e in evs)
+
+
 def test_text_stream_has_no_tool_args_so_the_fault_does_not_apply(recordings):
     r, p, _ = faulted(recordings, "openai_text", "tool_args_cut")
     assert r["how"] == "complete" and p.requests[0].get("fault_na") == "tool_args_cut" and "fault" not in p.requests[0]

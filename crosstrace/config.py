@@ -35,7 +35,7 @@ command = {command}
 inputs = ["Where is order 42 and when will it arrive?"]
 timeout_s = 120            # a healthy run must finish within this
 # cwd = "."
-# env = { MY_SETTING = "1" }
+# env = { MY_SETTING = "1" }    # "{proxy_url}" is replaced by the proxy, e.g. MY_BASE_URL = "{proxy_url}/v1"
 
 [record]
 runs = 1                   # healthy recordings per input (different sampled paths)

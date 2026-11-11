@@ -128,5 +128,15 @@ def test_classify_unit_cases():
     fb = reqs + [{**base, "idx": 1, "how": "fallback", "t": 2}]
     r = classify("server_error", 1, recd, fb, 0, "ok", False, "ok")
     assert r.verdict == "RECOVERED" and "fallback" in r.detail
+    # the agent ran a tool on cut arguments: the detail names the tool and the arguments it used
+    first = {"role": "user", "content": "where is order 42"}
+    recd2 = Recording(exchanges=[Exchange(idx=0, path="/v1/chat/completions", provider="openai", key="k0", state_key="s0",
+                                          request={"messages": [first]}, status=200, headers=[], stream=True, events=[])])
+    nxt = {"messages": [first, {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "get_order", "arguments": '{"order_'}}]},
+                        {"role": "tool", "tool_call_id": "c1", "content": "order not found"}]}
+    reqs2 = [{**base, "idx": 0, "how": "in_order", "t": 0, "fault": "tool_args_cut", "attempt": 1},
+             {**base, "idx": None, "how": "miss", "t": 1, "request": nxt}]
+    r = classify("tool_args_cut", 0, recd2, reqs2, 0, "", False, "ok")
+    assert r.verdict == "SILENT" and "ran tool get_order with arguments {\"order_" in r.detail
     assert early_silent(0, [{**base, "idx": 0, "fault": "x", "t": 0}, {**base, "idx": 1, "t": 1}])
     assert not early_silent(0, [{**base, "idx": 0, "fault": "x", "t": 0}, {**base, "idx": 0, "t": 1}, {**base, "idx": 1, "t": 2}])

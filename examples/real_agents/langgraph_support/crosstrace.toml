@@ -1,0 +1,20 @@
+# A real LangGraph agent against a real model (OpenRouter). Record needs OPENAI_API_KEY set to an OpenRouter key;
+# test needs no key (replay).
+
+[agent]
+command = ["python", "agent.py", "{input}"]
+inputs = [
+    "Where is order 42 and when will it arrive?",
+    "My order 42 arrived with a broken mug. What can you do?",
+]
+timeout_s = 120
+
+[record]
+runs = 1
+upstreams = { openai = "https://openrouter.ai/api" }
+
+[replay]
+masks = []
+
+[test]
+allow = []

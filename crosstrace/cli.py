@@ -93,6 +93,10 @@ def cmd_record(a):
             streamed = sum(e.stream for e in rec.exchanges)
             print(f"  {name}: {len(rec.exchanges)} model calls ({streamed} streamed), {rec.meta['seconds']:.1f} s, replay "
                   + ("stable" if st["stable"] else "NOT stable"))
+            fails = rec.meta.get("upstream_failures", [])
+            if fails:
+                print(f"    note: the real provider failed {len(fails)} time(s) during this run "
+                      f"({', '.join(sorted({f['error'] for f in fails}))}) and your agent retried; only the successful attempts were recorded")
             for p in st["problems"]:
                 print(f"    {p}")
             if not st["stable"]:

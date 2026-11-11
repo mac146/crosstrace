@@ -76,6 +76,28 @@ def _retry_after_s(entry):
         return max(0.0, t.timestamp() - entry["t"])
 
 
+def _tool_calls(body):
+    """[(tool name, arguments as JSON text)] of every tool call in a request's conversation (OpenAI chat, Anthropic, Responses)."""
+    out = []
+    for m in (body or {}).get("messages") or []:
+        for tc in (m or {}).get("tool_calls") or []:
+            f = tc.get("function") or {}
+            out.append((f.get("name"), f.get("arguments")))
+        for b in (m or {}).get("content") if isinstance((m or {}).get("content"), list) else []:
+            if isinstance(b, dict) and b.get("type") == "tool_use":
+                out.append((b.get("name"), json.dumps(b.get("input"), separators=(",", ":"))))
+    for it in (body or {}).get("input") if isinstance((body or {}).get("input"), list) else []:
+        if isinstance(it, dict) and it.get("type") == "function_call":
+            out.append((it.get("name"), it.get("arguments")))
+    return out
+
+
+def _new_tool_calls(faulted_request, next_request):
+    """Tool calls in the agent's next request that were not in the faulted request: the ones it took from the faulted response."""
+    before = _tool_calls(faulted_request)
+    return _tool_calls(next_request)[len(before):] if next_request else []
+
+
 def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_stdout, path=0, seconds=0.0):
     ex = recording.exchanges[at]
     model = [r for r in requests if r.get("provider")]
@@ -127,7 +149,11 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
     if other_pos is not None and (success_pos is None or other_pos < success_pos):
         nxt = after[other_pos]
         res.verdict = "SILENT"
-        if nxt.get("idx") is None:     # its next request is not in the recording: its context changed (partial or missing data)
+        cut = _new_tool_calls(ex.request, nxt.get("request")) if nxt.get("idx") is None else []
+        if cut:                        # the clearest harm: a tool ran on arguments from a response that never finished
+            name, args = cut[0]
+            res.detail = f"ran tool {name} with arguments {args} from a response that never finished, instead of retrying exchange {at} ({tries})"
+        elif nxt.get("idx") is None:   # its next request is not in the recording: its context changed (partial or missing data)
             res.detail = f"made its next model call with the failed response in its context instead of retrying exchange {at} ({tries})"
         else:
             res.detail = f"moved on to exchange {nxt['idx']} without a successful exchange {at} ({tries})"
@@ -141,6 +167,8 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
         full = delivered_text(ex, len(ex.events)).strip() if ex.stream else ""
         if part and part in stdout and (not full or full not in stdout):
             res.verdict, res.detail = "PARTIAL", f"printed the cut answer ({len(part)} of {len(full)} chars) and exited 0"
+        elif not stdout.strip() and (healthy_stdout or "").strip():
+            res.verdict, res.detail = "ENDED_EARLY", f"printed nothing and exited 0 after exchange {at} failed (a healthy run prints an answer)"
         else:
             res.verdict, res.detail = "ENDED_EARLY", f"exited 0 without a successful exchange {at}; output needs review"
         return res

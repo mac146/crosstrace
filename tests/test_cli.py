@@ -173,6 +173,13 @@ def test_no_recordings_is_a_setup_error(tmp_path, monkeypatch, capsys, upstream)
     assert code == 3 and "crosstrace record" in e
 
 
+def test_proxy_url_placeholder_for_agents_with_their_own_base_url_variable():
+    spec = runner.AgentSpec(command=["x"], env={"OPENCODE_BASE_URL": "{proxy_url}/v1", "OTHER": "plain"})
+    env = spec.environ("http://127.0.0.1:5555", replay=True)
+    assert env["OPENCODE_BASE_URL"] == "http://127.0.0.1:5555/v1" and env["OTHER"] == "plain"
+    assert env["OPENAI_BASE_URL"] == "http://127.0.0.1:5555/v1" and env["OPENAI_API_KEY"] == "sk-crosstrace-replay"
+
+
 def test_terminal_without_unicode_gets_ascii_marks():
     import io
     from crosstrace.report import for_terminal

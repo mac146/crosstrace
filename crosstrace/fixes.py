@@ -19,7 +19,8 @@ def sdk_family(requests):
 
 
 TIMEOUT = {
-    "openai-python": "pass a read timeout: `OpenAI(timeout=httpx.Timeout(60.0, read=20.0))` (the default is 600 s)",
+    "openai-python": "pass a read timeout: `OpenAI(timeout=httpx.Timeout(60.0, read=20.0))` (the default is 600 s); "
+                     "with LangChain: `ChatOpenAI(timeout=30)`",
     "anthropic-python": "pass a read timeout: `Anthropic(timeout=httpx.Timeout(60.0, read=20.0))` (the default is 10 minutes)",
     "openai-js": "pass `timeout` (ms) to the client or the request, e.g. `new OpenAI({ timeout: 20_000 })`",
     "anthropic-js": "pass `timeout` (ms) to the client or the request, e.g. `new Anthropic({ timeout: 20_000 })`",

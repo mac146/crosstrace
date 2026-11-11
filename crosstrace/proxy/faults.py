@@ -72,6 +72,31 @@ def is_tool_arg(text):
     return False
 
 
+def _arg_slots(obj):
+    """(container, key) pairs holding tool-argument text in one parsed event (OpenAI chat, Anthropic, OpenAI Responses)."""
+    if obj.get("type") == "content_block_delta" and (obj.get("delta") or {}).get("type") == "input_json_delta":
+        return [(obj["delta"], "partial_json")]
+    if obj.get("type") == "response.function_call_arguments.delta":
+        return [(obj, "delta")]
+    return [(tc["function"], "arguments") for c in obj.get("choices") or [] for tc in ((c or {}).get("delta") or {}).get("tool_calls") or []
+            if (tc.get("function") or {}).get("arguments")]
+
+
+def truncate_tool_args(text):
+    """The event with each tool-argument piece cut to its first half: what the client would have received if the stream had broken
+    inside that piece. Returns the text unchanged if a piece is too short to cut."""
+    name, _, obj = parse_event(text)
+    if not isinstance(obj, dict):
+        return text
+    slots = _arg_slots(obj)
+    for c, k in slots:
+        if len(c[k]) >= 2:
+            c[k] = c[k][:len(c[k]) // 2]
+    if not slots:
+        return text
+    return (f"event: {name}\n" if name else "") + "data: " + json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
 def body_end(ex):
     """Index of the first terminal event (= number of content events before it)."""
     return next((i for i, e in enumerate(ex.events) if is_terminal(e)), len(ex.events))
@@ -190,7 +215,8 @@ class StreamCutClean(Fault):
 
 
 class ToolArgsCut(Fault):
-    """Clean cut in the middle of a tool call's streamed JSON arguments: partial-JSON parsers may execute truncated arguments."""
+    """Clean cut in the middle of a tool call's streamed JSON arguments: partial-JSON parsers may execute truncated arguments.
+    The cut is always inside the arguments: models often send them in one piece, so the middle piece itself is cut in half."""
     name, stream_only = "tool_args_cut", True
 
     def applies(self, ex):
@@ -198,10 +224,12 @@ class ToolArgsCut(Fault):
 
     async def serve(self, rw, ex, entry):
         args = [i for i, e in enumerate(ex.events) if is_tool_arg(e)]
-        n = args[(len(args) - 1) // 2] + 1                  # through the middle argument piece
-        entry.update(status=ex.status, fault_detail={"events_sent": n, "arg_events_sent": (len(args) + 1) // 2, "arg_events": len(args)})
+        mid = args[(len(args) - 1) // 2]                    # the middle argument piece, sent cut in half
+        events = ex.events[:mid] + [truncate_tool_args(ex.events[mid])]
+        entry.update(status=ex.status, fault_detail={"events_sent": len(events), "arg_events_sent": (len(args) + 1) // 2,
+                                                     "arg_events": len(args)})
         await rw.start_chunked(ex.status, ex.headers)
-        await _events(rw, ex.events[:n])
+        await _events(rw, events)
         await rw.end_chunked()
         return True
 

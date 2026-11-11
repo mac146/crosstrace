@@ -209,8 +209,13 @@ class ModelProxy:
         except httpx.HTTPError as e:
             entry.update(status=502, upstream_error=type(e).__name__)
             await rw.send_full(502, JSON, _error_body("crosstrace_upstream_error", f"{type(e).__name__}: {e}"))
+            if record is not None:
+                self._upstream_failure(record, type(e).__name__)
             return True
-        if record is not None:
+        if record is not None and not 200 <= up.status_code < 300:
+            # a recording is a healthy run: a failed attempt (the agent's retry is what gets recorded) is noted, not replayed
+            self._upstream_failure(record, f"HTTP {up.status_code}")
+        elif record is not None:
             record.status = up.status_code
             record.headers = keep_headers(out_headers)
             record.stream = stream_body is None
@@ -219,6 +224,9 @@ class ModelProxy:
             record.duration_ms = round((time.monotonic() - t0) * 1000, 2)
             self.recording.add(record)
         return True
+
+    def _upstream_failure(self, record, what):
+        self.recording.meta.setdefault("upstream_failures", []).append({"path": record.path, "error": what})
 
 
 def _local_port(response):
