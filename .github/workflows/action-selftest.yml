@@ -1,0 +1,39 @@
+# Runs the CrossTrace GitHub Action on the example agent, the way a user's workflow would.
+# The naive agent must be caught (exit 1); the same recording with the fixed agent must pass (exit 0).
+name: action self-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  naive-agent-is-caught:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: ct
+        uses: mac146/crosstrace@main          # exactly as in the README
+        continue-on-error: true
+        with:
+          working-directory: examples/broken_agents
+          install: pip install openai
+      - name: expect problems found (exit 1)
+        run: |
+          echo "crosstrace exit code: ${{ steps.ct.outputs.exit-code }}"
+          test "${{ steps.ct.outputs.exit-code }}" = "1"
+
+  fixed-agent-passes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: switch the example to its fixed mode
+        run: sed -i 's/"naive"/"good"/' examples/broken_agents/crosstrace.toml
+      - id: ct
+        uses: ./                              # this commit's action
+        with:
+          working-directory: examples/broken_agents
+          install: pip install openai
+      - name: expect no problems (exit 0)
+        run: test "${{ steps.ct.outputs.exit-code }}" = "0"
