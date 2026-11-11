@@ -1,0 +1,13 @@
+{
+  "name": "crosstrace-framework-matrix-node",
+  "private": true,
+  "type": "module",
+  "description": "Framework matrix (build plan step 1): JS SDKs and frameworks checked for base-URL routing through the proxy",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.102",
+    "@ai-sdk/openai": "^4.0.114",
+    "@anthropic-ai/sdk": "^1.8.0",
+    "ai": "^7.0.169",
+    "openai": "^7.55.0"
+  }
+}

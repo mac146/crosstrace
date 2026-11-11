@@ -34,10 +34,21 @@ class Handler(BaseHTTPRequestHandler):
         self.n_on_conn += 1
         srv = self.server
         with srv.lock:
-            srv.log.append({"port": self.client_address[1], "n_on_conn": self.n_on_conn, "t": time.time(), "stream": bool(body.get("stream"))})
+            srv.log.append({"port": self.client_address[1], "n_on_conn": self.n_on_conn, "t": time.time(), "stream": bool(body.get("stream")),
+                            "path": self.path})
+        # echo (off by default, so Stage 21 is unchanged): the answer ends with the last user message, so different requests get different answers
+        tail = ""
+        if srv.echo:
+            users = [m for m in body.get("messages", []) if m.get("role") == "user"]
+            last = users[-1]["content"] if users else ""
+            tail = "|" + (last if isinstance(last, str) else json.dumps(last))
+        if self.path.startswith("/v1/messages"):
+            return self._anthropic(body, tail)
+        if self.path.startswith("/v1/responses"):
+            return self._responses(body, tail)
         if not body.get("stream"):
             data = json.dumps({"id": "chatcmpl-mock", "object": "chat.completion", "created": 0, "model": "mock",
-                               "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok " * srv.chunks}, "finish_reason": "stop"}],
+                               "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok " * srv.chunks + tail}, "finish_reason": "stop"}],
                                "usage": {"prompt_tokens": 1, "completion_tokens": srv.chunks, "total_tokens": srv.chunks + 1}}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -54,6 +65,9 @@ class Handler(BaseHTTPRequestHandler):
             ev = _chunk({"choices": [{"index": 0, "delta": {"content": "ok "}, "finish_reason": None}]})
             self._write_chunk(b"data: " + json.dumps(ev).encode() + b"\n\n")
             time.sleep(srv.gap_ms / 1000)
+        if tail:
+            ev = _chunk({"choices": [{"index": 0, "delta": {"content": tail}, "finish_reason": None}]})
+            self._write_chunk(b"data: " + json.dumps(ev).encode() + b"\n\n")
         last = _chunk({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
         self._write_chunk(b"data: " + json.dumps(last).encode() + b"\n\n")
         if srv.tail_ms:
@@ -65,15 +79,67 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(data), data))
         self.wfile.flush()
 
+    def _responses(self, body, tail):
+        """OpenAI Responses API, non-streaming only (enough for clients that default to it, e.g. the Vercel AI SDK)."""
+        srv = self.server
+        if not tail and srv.echo:
+            inp = body.get("input")
+            tail = "|" + (inp if isinstance(inp, str) else json.dumps(inp)[:200])
+        text = "ok " * srv.chunks + tail
+        data = json.dumps({"id": "resp_mock", "object": "response", "created_at": 0, "status": "completed", "model": "mock",
+                           "output": [{"type": "message", "id": "msg_mock", "status": "completed", "role": "assistant",
+                                       "content": [{"type": "output_text", "text": text, "annotations": []}]}],
+                           "usage": {"input_tokens": 1, "output_tokens": srv.chunks, "total_tokens": srv.chunks + 1}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _anthropic(self, body, tail):
+        """Anthropic Messages API: one JSON message, or the SSE event sequence message_start ... message_stop (no [DONE])."""
+        srv = self.server
+        text = "ok " * srv.chunks + tail
+        usage = {"input_tokens": 1, "output_tokens": srv.chunks}
+        msg = {"id": "msg_mock", "type": "message", "role": "assistant", "model": "mock", "stop_sequence": None}
+        if not body.get("stream"):
+            data = json.dumps({**msg, "content": [{"type": "text", "text": text}], "stop_reason": "end_turn", "usage": usage}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+
+        def ev(name, obj):
+            self._write_chunk(b"event: " + name.encode() + b"\ndata: " + json.dumps(obj).encode() + b"\n\n")
+
+        ev("message_start", {"type": "message_start", "message": {**msg, "content": [], "stop_reason": None,
+                                                                  "usage": {"input_tokens": 1, "output_tokens": 0}}})
+        ev("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+        pieces = ["ok "] * srv.chunks + ([tail] if tail else [])
+        for p in pieces:
+            ev("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": p}})
+            time.sleep(srv.gap_ms / 1000)
+        ev("content_block_stop", {"type": "content_block_stop", "index": 0})
+        ev("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": srv.chunks}})
+        ev("message_stop", {"type": "message_stop"})
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 256
 
 
-def make_server(port=0, chunks=20, gap_ms=2, tail_ms=5):
+def make_server(port=0, chunks=20, gap_ms=2, tail_ms=5, echo=False):
     srv = Server(("127.0.0.1", port), Handler)
-    srv.chunks, srv.gap_ms, srv.tail_ms = chunks, gap_ms, tail_ms
+    srv.chunks, srv.gap_ms, srv.tail_ms, srv.echo = chunks, gap_ms, tail_ms, echo
     srv.log, srv.lock = [], threading.Lock()
     return srv
 

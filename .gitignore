@@ -15,3 +15,8 @@ scripts/_*
 # Stage 21 node clients
 eval/sdk_conn_node/node_modules/
 eval/sdk_conn_node/package-lock.json
+
+# private planning doc
+BUILD_PLAN.md
+scripts/matrix_node/node_modules/
+scripts/matrix_node/package-lock.json
