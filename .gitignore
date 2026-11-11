@@ -11,3 +11,7 @@ __pycache__/
 
 # temporary helper scripts (never commit: they can contain local paths)
 scripts/_*
+
+# Stage 21 node clients
+eval/sdk_conn_node/node_modules/
+eval/sdk_conn_node/package-lock.json

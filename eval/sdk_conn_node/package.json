@@ -1,0 +1,10 @@
+{
+  "name": "crosstrace-sdk-conn-node",
+  "private": true,
+  "type": "module",
+  "description": "Stage 21: openai-node clients for the connection-reuse test (two SDK versions side by side)",
+  "dependencies": {
+    "openai-new": "npm:openai@7.55.0",
+    "openai-old": "npm:openai@7.4.0"
+  }
+}
