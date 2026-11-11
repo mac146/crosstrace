@@ -50,6 +50,7 @@ class ModelProxy:
         self.requests = []                    # one dict per request (the log the verdict engine reads)
         self._next_idx = 0
         self._writers = set()
+        self._tasks = set()
         self._server = None
         self._client = None
 
@@ -69,6 +70,8 @@ class ModelProxy:
     async def close(self):
         if self._server is not None:
             self._server.close()
+            for t in list(self._tasks):          # e.g. a stall fault sleeping with the connection held open
+                t.cancel()
             for w in list(self._writers):
                 w.close()
             await self._server.wait_closed()
@@ -81,6 +84,8 @@ class ModelProxy:
         conn = {"conn": len(self.connections), "port": peer[1], "t_open": time.time(), "t_close": None, "requests": 0}
         self.connections.append(conn)
         self._writers.add(writer)
+        task = asyncio.current_task()
+        self._tasks.add(task)
         rw = ResponseWriter(writer)
         try:
             while True:
@@ -95,11 +100,12 @@ class ModelProxy:
                 keep_open = await self._dispatch(req, rw, conn)
                 if not keep_open or not req.keep_alive:
                     break
-        except (ConnectionError, asyncio.IncompleteReadError):
+        except (ConnectionError, asyncio.IncompleteReadError, asyncio.CancelledError):
             pass
         finally:
             conn["t_close"] = time.time()
             self._writers.discard(writer)
+            self._tasks.discard(task)
             if not writer.is_closing():
                 writer.close()
 

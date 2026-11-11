@@ -15,6 +15,26 @@ def _chunk(obj):
     return {"id": "chatcmpl-mock", "object": "chat.completion.chunk", "created": 0, "model": "mock", **obj}
 
 
+# tool-call arguments the mock streams in pieces (long enough that a cut in the middle leaves visibly truncated JSON)
+TOOL_ARGS = json.dumps({"customer_id": "42", "action": "refund", "amount": 129.99, "note": "customer reported a damaged item on delivery"})
+
+
+def _pieces(s, n=6):
+    step = -(-len(s) // n)
+    return [s[i:i + step] for i in range(0, len(s), step)]
+
+
+def _has_tool_result(body):
+    """OpenAI: a message with role tool. Anthropic: a user message whose content holds a tool_result block."""
+    for m in body.get("messages", []):
+        if m.get("role") == "tool":
+            return True
+        c = m.get("content")
+        if isinstance(c, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+            return True
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -42,6 +62,12 @@ class Handler(BaseHTTPRequestHandler):
             users = [m for m in body.get("messages", []) if m.get("role") == "user"]
             last = users[-1]["content"] if users else ""
             tail = "|" + (last if isinstance(last, str) else json.dumps(last))
+        # tools in the request and no tool result yet: answer with a call to the first tool (arguments streamed in pieces)
+        if body.get("tools") and not _has_tool_result(body):
+            if self.path.startswith("/v1/messages"):
+                return self._anthropic_tool(body)
+            if self.path.startswith("/v1/chat/completions"):
+                return self._openai_tool(body)
         if self.path.startswith("/v1/messages"):
             return self._anthropic(body, tail)
         if self.path.startswith("/v1/responses"):
@@ -77,6 +103,67 @@ class Handler(BaseHTTPRequestHandler):
         else:  # terminator in the same write as [DONE]
             data = b"data: [DONE]\n\n"
             self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(data), data))
+        self.wfile.flush()
+
+    def _sse_headers(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+
+    def _json(self, obj):
+        data = json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _openai_tool(self, body):
+        name = body["tools"][0].get("function", {}).get("name", "tool")
+        if not body.get("stream"):
+            return self._json({"id": "chatcmpl-mock", "object": "chat.completion", "created": 0, "model": "mock",
+                               "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                                   "role": "assistant", "content": None, "tool_calls": [
+                                       {"id": "call_mock", "type": "function", "function": {"name": name, "arguments": TOOL_ARGS}}]}}],
+                               "usage": {"prompt_tokens": 1, "completion_tokens": 10, "total_tokens": 11}})
+        self._sse_headers()
+
+        def ev(delta, finish=None):
+            self._write_chunk(b"data: " + json.dumps(_chunk({"choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})).encode() + b"\n\n")
+
+        ev({"role": "assistant", "content": None,
+            "tool_calls": [{"index": 0, "id": "call_mock", "type": "function", "function": {"name": name, "arguments": ""}}]})
+        for piece in _pieces(TOOL_ARGS):
+            ev({"tool_calls": [{"index": 0, "function": {"arguments": piece}}]})
+            time.sleep(self.server.gap_ms / 1000)
+        ev({}, "tool_calls")
+        self._write_chunk(b"data: [DONE]\n\n")
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
+    def _anthropic_tool(self, body):
+        name = body["tools"][0].get("name", "tool")
+        msg = {"id": "msg_mock", "type": "message", "role": "assistant", "model": "mock", "stop_sequence": None}
+        if not body.get("stream"):
+            return self._json({**msg, "content": [{"type": "tool_use", "id": "toolu_mock", "name": name, "input": json.loads(TOOL_ARGS)}],
+                               "stop_reason": "tool_use", "usage": {"input_tokens": 1, "output_tokens": 10}})
+        self._sse_headers()
+
+        def ev(etype, obj):
+            self._write_chunk(b"event: " + etype.encode() + b"\ndata: " + json.dumps(obj).encode() + b"\n\n")
+
+        ev("message_start", {"type": "message_start", "message": {**msg, "content": [], "stop_reason": None,
+                                                                  "usage": {"input_tokens": 1, "output_tokens": 0}}})
+        ev("content_block_start", {"type": "content_block_start", "index": 0,
+                                   "content_block": {"type": "tool_use", "id": "toolu_mock", "name": name, "input": {}}})
+        for piece in _pieces(TOOL_ARGS):
+            ev("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": piece}})
+            time.sleep(self.server.gap_ms / 1000)
+        ev("content_block_stop", {"type": "content_block_stop", "index": 0})
+        ev("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 10}})
+        ev("message_stop", {"type": "message_stop"})
+        self.wfile.write(b"0\r\n\r\n")
         self.wfile.flush()
 
     def _responses(self, body, tail):

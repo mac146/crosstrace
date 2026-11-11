@@ -20,3 +20,4 @@ eval/sdk_conn_node/package-lock.json
 BUILD_PLAN.md
 scripts/matrix_node/node_modules/
 scripts/matrix_node/package-lock.json
+scripts/fault_clients/__pycache__/
