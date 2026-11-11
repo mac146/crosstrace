@@ -45,14 +45,28 @@ response politely. The same behaviour shows up across SDKs: [what the OpenAI, An
 
 ## Try it (no API key)
 
-The example agent and its recordings are in this repo, so the test replays them offline (about 2 minutes, 38 trials):
+[examples/broken_agents](examples/broken_agents) is a small agent on the official openai SDK whose failure handling can be switched
+between good and deliberately broken. Its recording (made against a local mock provider) is in the repo, so the test runs offline:
 
 ```bash
 git clone https://github.com/mac146/crosstrace && cd crosstrace
-pip install . -r examples/real_agents/langgraph_support/requirements.txt
-cd examples/real_agents/langgraph_support
-crosstrace test
+pip install . openai
+cd examples/broken_agents
+crosstrace test                                   # the naive agent: hidden failures, exit code 1
+sed -i 's/"naive"/"good"/' crosstrace.toml && crosstrace test     # the same recording, a fixed agent: exit code 0
 ```
+
+To reproduce the LangGraph results above, record the agent once with an OpenAI-compatible key (an OpenRouter key works as is, a few
+cents), then test:
+
+```bash
+pip install -r examples/real_agents/langgraph_support/requirements.txt
+cd examples/real_agents/langgraph_support
+OPENAI_API_KEY=... crosstrace record && crosstrace test
+```
+
+A real model answers differently from run to run, so your recordings, and the exchanges a fault lands on, will differ from ours; the
+behaviour under each fault is what to compare.
 
 ## Use it on your agent
 

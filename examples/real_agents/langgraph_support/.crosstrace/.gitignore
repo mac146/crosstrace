@@ -1,2 +1,3 @@
-# recordings/ is meant to be committed (CI replays it); reports are local
+# recordings/ normally get committed (CI replays them). Not here: this repo is public; record your own with `crosstrace record`.
+recordings/
 reports/
