@@ -40,7 +40,8 @@ def advice(verdict, fault, requests=None):
     sdk = sdk_family(requests)
     if verdict == "HANG":
         return [TIMEOUT.get(sdk, "set a read (inactivity) timeout on model calls; SDK defaults are many minutes"),
-                "make sure a timed-out call is retried or surfaced, not awaited forever"] + (
+                "make sure a timed-out call is retried or surfaced, not awaited forever",
+                "if your agent already uses a long timeout on purpose, raise `[test] trial_timeout_s` above timeout x attempts"] + (
             ["the SDK waits for whatever Retry-After says; cap it, or fail fast and let your scheduler retry"]
             if fault.startswith("rate_limit") and sdk and sdk.startswith("anthropic") else [])
     if verdict in ("SILENT", "PARTIAL"):

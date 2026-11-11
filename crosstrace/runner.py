@@ -127,9 +127,10 @@ def json_diff(a, b, path="", limit=3):
 def stability(spec, recording, runs=2):
     """Replay with no fault `runs` times: every model request must match in order or by concurrency, the whole recording must be used,
     and the output must equal the recorded output. Also reports connections per model call (CHURN, from Stage 21)."""
-    problems, churn, ua = [], [], []
+    problems, churn, ua, secs = [], [], [], []
     for i in range(runs):
         o, p = replay(spec, recording)
+        secs.append(o.seconds)
         model = [r for r in p.requests if r.get("provider")]
         ua += model
         misses = [r for r in model if r.get("how") == "miss"]
@@ -150,7 +151,7 @@ def stability(spec, recording, runs=2):
             problems.append(f"replay {i + 1}: output differs from the recorded run")
         if model:
             churn.append(len({r['port'] for r in model}) / len(model))
-    return {"stable": not problems, "problems": problems,
+    return {"stable": not problems, "problems": problems, "replay_seconds": round(max(secs), 2) if secs else None,
             "connections_per_call": round(max(churn), 2) if churn else None,
             "churn": bool(churn) and len(recording.exchanges) >= 3 and max(churn) >= 0.9,
             "requests": [{k: r.get(k) for k in ("user-agent",)} for r in ua[:1]]}

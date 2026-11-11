@@ -104,6 +104,13 @@ def test_pr_sampling_is_deterministic_and_keeps_first_and_last():
     assert [k for _, _, k in runner.plan_trials(recs, fs, only_at=3)] == [3]
 
 
+def test_trial_budget_comes_from_the_replay_not_the_recorded_wall_time():
+    # recorded run: 46 s (slow provider, one failed attempt); replay of the same agent: 3 s
+    assert cli.trial_budget([{"replay_seconds": 3.0}, {"replay_seconds": 2.0}]) == 60.0     # floor: a 30 s timeout + 1 retry is no HANG
+    assert cli.trial_budget([{"replay_seconds": 25.0}]) == 100.0
+    assert cli.trial_budget([{"replay_seconds": None}]) == 60.0
+
+
 def test_stall_always_outlasts_the_trial_budget():
     assert runner.effective_params("stream_stall", {}, 40.0)["stall_s"] > 40.0
     assert runner.effective_params("idle_kill", {}, 40.0)["idle_s"] < 40.0

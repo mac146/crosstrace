@@ -120,6 +120,17 @@ def replay_command(cfg, rec):
     return cfg.command_for(rec.meta["input"]) if "input" in rec.meta else rec.meta["command"]
 
 
+MIN_TRIAL_S = 60.0
+
+
+def trial_budget(stability):
+    """Seconds a trial may run before it is a HANG: 4x the slowest fault-free replay (the same agent under the same conditions; the
+    recorded wall time would include the real provider's latency and failed attempts), at least 60 s, so an agent with a sensible
+    30 s read timeout that retries once is never called a HANG."""
+    replays = [s["replay_seconds"] for s in stability if s.get("replay_seconds")]
+    return max(MIN_TRIAL_S, 4 * max(replays, default=0))
+
+
 def cmd_test(a):
     cfg = C.load(a.config)
     if a.mode not in cfg.modes:
@@ -136,12 +147,11 @@ def cmd_test(a):
     if not recs:
         err(f"no recordings in {os.path.relpath(cfg.recordings_dir)}; run `crosstrace record` first")
         return EXIT_SETUP
-    healthy = max(r.meta.get("seconds", 0) for r in recs)
-    timeout_s = float(cfg.trial_timeout_s or max(30.0, 4 * healthy))
     t0 = time.monotonic()
     log = (lambda *x: None) if a.quiet else (lambda m: print(m, file=sys.stderr, flush=True))
     log(f"checking replay of {len(recs)} recording(s)...")
-    stab = [runner.stability(spec_for(cfg, replay_command(cfg, r), timeout_s), r, runs=mode.stability_runs) for r in recs]
+    stab = [runner.stability(spec_for(cfg, replay_command(cfg, r)), r, runs=mode.stability_runs) for r in recs]
+    timeout_s = float(cfg.trial_timeout_s or trial_budget(stab))
     stable_paths = {i for i, s in enumerate(stab) if s["stable"]}
     planned = [t for t in runner.plan_trials(recs, faults, mode.max_exchanges, a.seed, a.path, a.at) if t[0] in stable_paths]
     planned_labels = {fs.label for _, fs, _ in planned}

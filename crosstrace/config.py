@@ -48,7 +48,7 @@ masks = []
 [test]
 # Verdicts that should not fail the build (e.g. "ENDED_EARLY" if your agent ends politely on errors).
 allow = []
-# trial_timeout_s = 60     # default: 4x the slowest healthy run, at least 30 s
+# trial_timeout_s = 90     # a trial running longer is a HANG. Default: 4x the slowest fault-free replay, at least 60 s
 
 # [modes.pr]               # override the built-in modes: faults, max_exchanges (0 = all), stability_runs, jobs
 # faults = ["stream_cut_clean", "server_error", { name = "overloaded", heal = "never" }]

@@ -51,7 +51,9 @@ SYSTEM = ("You are a customer-support agent for an online shop. Use the tools to
 
 def main():
     question = " ".join(sys.argv[1:]) or "Where is order 42 and when will it arrive?"
-    llm = ChatOpenAI(model=os.environ.get("MODEL", "z-ai/glm-5.3-flash"), streaming=True, temperature=0,
+    # LLM_TIMEOUT: the fix CrossTrace suggests for HANG (unset = the library default, which is what most agents run with)
+    timeout = float(os.environ["LLM_TIMEOUT"]) if os.environ.get("LLM_TIMEOUT") else None
+    llm = ChatOpenAI(model=os.environ.get("MODEL", "z-ai/glm-5.3-flash"), streaming=True, temperature=0, timeout=timeout,
                      base_url=os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"))
     agent = create_react_agent(llm, [get_order, track_shipment, refund_policy], prompt=SYSTEM)
     result = agent.invoke({"messages": [("user", question)]}, {"recursion_limit": 12})
