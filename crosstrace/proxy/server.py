@@ -140,6 +140,7 @@ class ModelProxy:
             entry.update(how=how, idx=ex.idx if ex else None)
             if ex is None:
                 entry["status"] = 502
+                entry["request"] = norm            # kept only for misses: shows the user which field differs from the recording
                 await rw.send_full(502, JSON, _error_body("crosstrace_replay_miss", "no recorded exchange matches this request"))
                 return True
             fault = self.faults.select(entry, ex) if self.faults else None

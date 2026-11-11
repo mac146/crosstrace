@@ -1,0 +1,12 @@
+# CrossTrace config for the example agent. The recordings next to it were made against the mock provider
+# (mockservices/sse_server.py), so `crosstrace test` works here with no API key.
+#   crosstrace test                       -> the naive agent: hidden failures, exit 1
+#   change --mode naive to --mode good    -> no problems, exit 0
+
+[agent]
+command = ["python", "agent.py", "--mode", "naive", "--question", "{input}"]
+inputs = ["Where is order 42 and when will it arrive?"]
+timeout_s = 60
+
+[test]
+trial_timeout_s = 15

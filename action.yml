@@ -1,0 +1,57 @@
+name: CrossTrace
+description: Replay your AI agent's recorded runs with real provider and stream faults, and fail the build on failures the agent hides.
+branding:
+  icon: zap
+  color: red
+
+inputs:
+  mode:
+    description: "pr (fast, sampled) or nightly (every fault at every exchange)"
+    default: pr
+  working-directory:
+    description: Directory that holds crosstrace.toml and .crosstrace/recordings
+    default: "."
+  install:
+    description: Command that installs your agent's own dependencies (e.g. "pip install -r requirements.txt")
+    default: ""
+  args:
+    description: Extra arguments for `crosstrace test`
+    default: ""
+  python-version:
+    description: Python used to run CrossTrace (your agent runs with whatever `install` sets up)
+    default: "3.12"
+
+outputs:
+  exit-code:
+    description: "0 no problems, 1 problems found, 2 config error, 3 setup problem, 4 internal error"
+    value: ${{ steps.test.outputs.exit-code }}
+  report:
+    description: Path of the JSON report
+    value: ${{ inputs.working-directory }}/crosstrace-report.json
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install CrossTrace
+      shell: bash
+      run: python -m pip install --quiet "${{ github.action_path }}"
+    - name: Install the agent
+      if: inputs.install != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: ${{ inputs.install }}
+    - name: crosstrace test
+      id: test
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NO_COLOR: "1"
+      run: |
+        set +e
+        crosstrace test --mode "${{ inputs.mode }}" --md "$GITHUB_STEP_SUMMARY" --json crosstrace-report.json ${{ inputs.args }}
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit $code

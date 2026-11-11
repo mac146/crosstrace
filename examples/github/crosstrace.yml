@@ -1,0 +1,20 @@
+# Example workflow: copy to .github/workflows/crosstrace.yml in your agent's repository.
+# Needs crosstrace.toml and committed recordings (.crosstrace/recordings/, made once with `crosstrace record`).
+# No API keys: tests replay the recordings.
+name: crosstrace
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"          # nightly: every fault at every exchange
+  workflow_dispatch:
+
+jobs:
+  resilience:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mac146/crosstrace@main    # pin to a release tag once one exists
+        with:
+          mode: ${{ github.event_name == 'schedule' && 'nightly' || 'pr' }}
+          install: pip install -r requirements.txt

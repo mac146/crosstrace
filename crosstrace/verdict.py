@@ -126,9 +126,11 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
         return res
     if other_pos is not None and (success_pos is None or other_pos < success_pos):
         nxt = after[other_pos]
-        what = f"exchange {nxt['idx']}" if nxt.get("idx") is not None else "an unrecorded request"
         res.verdict = "SILENT"
-        res.detail = f"continued to {what} without a successful exchange {at} ({tries})"
+        if nxt.get("idx") is None:     # its next request is not in the recording: its context changed (partial or missing data)
+            res.detail = f"made its next model call with the failed response in its context instead of retrying exchange {at} ({tries})"
+        else:
+            res.detail = f"moved on to exchange {nxt['idx']} without a successful exchange {at} ({tries})"
         return res
     if success_pos is None:
         if exit_code != 0:

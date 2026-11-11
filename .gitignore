@@ -21,3 +21,7 @@ BUILD_PLAN.md
 scripts/matrix_node/node_modules/
 scripts/matrix_node/package-lock.json
 scripts/fault_clients/__pycache__/
+
+# packaging artifacts
+build/
+*.egg-info/
