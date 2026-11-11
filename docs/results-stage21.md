@@ -42,3 +42,16 @@ costs almost nothing here, so **this stage shows the churn, not its cost on the 
 ## Limits
 Loopback mock server, no TLS, no HTTP/2, one Node and one Python version each, sequential calls only, one run per arm in the main table (the
 node arm was rerun three times). Latency cost on a real TLS path, and the gap real providers leave after `[DONE]`, are not measured.
+
+## Stage 21b: what a new connection costs on the real path
+Harness [eval/tls_cost.py](../eval/tls_cost.py), data [data-stage21b.json](data-stage21b.json). Unauthenticated `GET /v1/models` (401 every time: no key,
+no spend) from this machine (WSL, India), httpx 0.28.1 over HTTP/1.1, 30 alternating pairs per host:
+
+| host | reused connection (median) | new connection (median) | cost of a new connection |
+|---|---|---|---|
+| api.openai.com | 300.5 ms | 408.7 ms | **108.2 ms** |
+| api.anthropic.com | 244.3 ms | 371.3 ms | **127.0 ms** |
+
+Prediction (30-300 ms on both hosts): **held**. So for a client that does not reuse its connection (node 7.55.0 and python sync streaming in
+the table above), each streamed call pays roughly 100-130 ms extra from this location, before the model produces anything. One location,
+one time of day, medians of 30; the cost scales with the round-trip time to the provider's edge and will differ elsewhere.

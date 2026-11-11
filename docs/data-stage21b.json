@@ -1,0 +1,20 @@
+{
+ "https://api.openai.com/v1/models": {
+  "reused_median_ms": 300.5,
+  "new_median_ms": 408.7,
+  "cost_ms": 108.2,
+  "status": [
+   401
+  ],
+  "pairs": 30
+ },
+ "https://api.anthropic.com/v1/models": {
+  "reused_median_ms": 244.3,
+  "new_median_ms": 371.3,
+  "cost_ms": 127.0,
+  "status": [
+   401
+  ],
+  "pairs": 30
+ }
+}

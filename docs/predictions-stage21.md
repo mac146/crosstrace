@@ -30,3 +30,8 @@ this per call, from outside the process, with no SDK changes, and does it agree 
 ## I would be wrong if
 - the kernel and server counts disagree (then the collector is not a trustworthy witness for this claim), or
 - node 7.55.0 streaming reuses its connection at tail 5 ms (then #3050 does not reproduce here, and there is no post).
+
+## Stage 21b (added after Stage 21's results, BEFORE this measurement): what a new connection costs on the real path
+Unauthenticated `GET /v1/models` (answered 401, so no key and no spend) to api.openai.com and api.anthropic.com from this machine, with httpx:
+a reused client vs a new client per request, 30 alternating pairs per host. The difference of the medians is the cost of a new TCP + TLS
+connection. Prediction: between 30 and 300 ms per new connection on both hosts (70%).
