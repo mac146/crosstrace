@@ -69,7 +69,9 @@ class ReplaySession:
         self.used = set()
         self.served = []                 # indices in the order served (repeats included)
 
-    def match(self, key):
+    def match(self, key, state_key=None):
+        """state_key: when nothing matches by key, an exchange with the same conversation state (another model or other sampling
+        parameters: a fallback) is served, already served ones first (a fallback usually follows a failed attempt)."""
         i, how = None, "miss"
         if self.cursor < len(self.ex) and self.ex[self.cursor].key == key and self.cursor not in self.used:
             i, how = self.cursor, "in_order"
@@ -81,6 +83,12 @@ class ReplaySession:
                 i = next((j for j in reversed(self.served) if self.ex[j].key == key), None)
                 if i is not None:
                     how = "repeat"
+        if i is None and state_key is not None:
+            i = next((j for j in reversed(self.served) if self.ex[j].state_key == state_key), None)
+            if i is None:
+                i = next((j for j in range(len(self.ex)) if j not in self.used and self.ex[j].state_key == state_key), None)
+            if i is not None:
+                how = "fallback"
         if i is None:
             return None, "miss"
         self.used.add(i)

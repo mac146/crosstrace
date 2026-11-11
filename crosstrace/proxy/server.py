@@ -136,7 +136,7 @@ class ModelProxy:
         entry.update(provider=provider, key=key, state_key=state_key, stream=bool(body.get("stream")))
 
         if self.mode == "replay":
-            ex, how = self.session.match(key)
+            ex, how = self.session.match(key, state_key)
             entry.update(how=how, idx=ex.idx if ex else None)
             if ex is None:
                 entry["status"] = 502
