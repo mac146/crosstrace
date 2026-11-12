@@ -81,7 +81,7 @@ See [`action.yml`](../action.yml) and [`examples/github/crosstrace.yml`](../exam
 
 ## Limits (v0.1)
 
-- Model calls only (OpenAI chat completions and Responses, Anthropic Messages). Tool faults through MCP come next.
+- Model calls only (OpenAI chat completions and Responses, Anthropic Messages). Tool calls (MCP) are not tested yet; the planned `lost_response` fault and `DUPLICATE` verdict are described in the README roadmap.
 - Plain HTTP/1.1 between your agent and the local proxy; connection findings carry that protocol.
 - Agents that make model calls concurrently are matched correctly, but the verdict assumes the faulted call's result is needed before
   the next call.

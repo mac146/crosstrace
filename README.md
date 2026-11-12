@@ -128,10 +128,27 @@ Details: [docs/cli.md](docs/cli.md). Fault list: `crosstrace faults`.
 Early (v0.1). Tested end to end on the example agents here and the SDK matrix above; not yet on anyone else's production agent. If you
 try it on yours, an issue with what it found (or got wrong) is the most useful thing you can send.
 
-- Model calls only: OpenAI chat completions and Responses, Anthropic Messages. Faults on tool calls (MCP) come next.
+- Model calls only today: OpenAI chat completions and Responses, Anthropic Messages. Tool calls are not tested yet.
 - Python 3.11+. Your agent can be in any language; it just has to be runnable as a command.
 - The healthy run must be repeatable enough to replay. Random values in prompts need a mask; heavy run-to-run variation in what your
   agent does needs several recorded runs.
+
+## Roadmap: tool calls (MCP)
+
+Planned, not built. The next step is a proxy for MCP tool calls, with the same record, replay and fault approach as for model calls.
+The fault that matters most there is **the tool succeeded but its response was lost**. The tool did its work (sent the email, charged
+the card, submitted the form), the reply never reached the agent, and a retry does the work a second time.
+
+- **Fault:** `lost_response` runs the tool for real during recording, then drops the reply at the byte level.
+- **What it will measure:** how many times the agent triggers a write after the fault, **including after it recovers**. A run that
+  recovers and finishes with the right answer can still have written twice, so recovering is not enough to pass.
+- **New verdict:** `DUPLICATE`, when a tool that changes something (sends, pays, deletes, updates, submits) is called again with the
+  same arguments after a lost response.
+- **Browser actions count too.** A retried "click submit" or "place order" step is the same failure as a retried `send_email`. Which
+  tools count as writes will be listed in config, with a default guess from tool names.
+
+Not decided yet: how to tell a repeat that is safe (an idempotent tool, or one called with an idempotency key) from one that isn't, without
+asking you to annotate every tool.
 
 ## Background
 
