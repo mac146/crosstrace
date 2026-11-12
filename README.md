@@ -6,6 +6,8 @@ failure it tells you what your agent did next. It runs in CI on every pull reque
 
 Your agent needs no code changes and no SDK. It runs as it is, with its real SDK and framework code paths.
 
+**[crosstrace-site.vercel.app](https://crosstrace-site.vercel.app/)**: the short version, with an animated walkthrough.
+
 ## What it finds in a stock LangGraph agent
 
 A support agent written the way most LangGraph tutorials write one (`create_react_agent`, streaming `ChatOpenAI`, default settings,
