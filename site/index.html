@@ -7,6 +7,14 @@
 <meta property="og:description" content="Replay real runs of your AI agent, break one model call at a time, and see what it does next. In CI, on every pull request.">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+(function () {
+  var t = null;
+  try { t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('ct-theme'); } catch (e) {}
+  if (t !== 'light' && t !== 'dark') { t = (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'; }
+  document.documentElement.setAttribute('data-theme', t);
+})();
+</script>
 <meta name="theme-color" content="#0b0c10">
 <title>CrossTrace</title>
 <meta name="description" content="A crash test for AI agents: replay real runs, break one model call at a time, see what your agent does next.">
@@ -247,6 +255,7 @@ td.n { font: 600 14px/1.5 var(--mono); color: var(--text); font-variant-numeric:
   background: conic-gradient(from 180deg, rgba(155,227,208,.45), rgba(169,201,255,.25), rgba(238,165,189,.45), rgba(244,195,162,.4), rgba(155,227,208,.45)); }
 .cta-box > * { position: relative; }
 .cta-box p { color: var(--dim); font-size: 18px; max-width: 34em; margin: 0 auto 32px; }
+.cta-box p.eyebrow { font-size: 13px; max-width: none; margin: 0 0 18px; }
 .limits { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 .limits span { font: 12px/1.3 var(--mono); color: var(--dim); padding: 8px 12px; border-radius: 999px; background: rgba(0,0,0,.35); border: 1px solid var(--edge); }
 .foot { padding-block: 36px 48px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; font: 13px/1.4 var(--mono); color: var(--faint); }
@@ -279,6 +288,66 @@ td.n { font: 600 14px/1.5 var(--mono); color: var(--text); font-variant-numeric:
 }
 
 html, body { margin: 0; }
+
+/* ---------- light theme ---------- */
+:root[data-theme="light"] {
+  --bg: #f6f7f9; --bg-2: #ffffff;
+  --glass: rgba(16, 20, 30, 0.035); --glass-2: rgba(16, 20, 30, 0.06);
+  --edge: rgba(16, 20, 30, 0.10); --edge-2: rgba(16, 20, 30, 0.18);
+  --text: #12151c; --dim: #566070; --faint: #7c8493;
+  --grad: linear-gradient(100deg, #e8a77d 0%, #e58f8a 45%, #d97499 100%);
+  --grad-heal: linear-gradient(100deg, #6fd0b8 0%, #7fb0f2 100%);
+  color-scheme: light;
+}
+:root[data-theme="light"] .window, :root[data-theme="light"] .code, :root[data-theme="light"] .flow,
+:root[data-theme="light"] .json, :root[data-theme="light"] .heat, :root[data-theme="light"] .cta-box {
+  --bg: #0e1015; --bg-2: #12151b; --glass: rgba(255,255,255,.035); --glass-2: rgba(255,255,255,.06);
+  --edge: rgba(255,255,255,.09); --edge-2: rgba(255,255,255,.16);
+  --text: #eef0f3; --dim: #9096a3; --faint: #666c79;
+  --grad: linear-gradient(100deg, #f4c3a2 0%, #f1b0a7 45%, #eea5bd 100%);
+  --grad-heal: linear-gradient(100deg, #9be3d0 0%, #a9c9ff 100%);
+}
+:root[data-theme="light"] .noise { opacity: .025; }
+:root[data-theme="light"] .nav { background: rgba(255,255,255,.72); box-shadow: 0 1px 0 rgba(16,20,30,.03), 0 8px 30px -14px rgba(16,20,30,.18); }
+:root[data-theme="light"] .nav nav a.cta, :root[data-theme="light"] .btn.primary { color: #fff; background: var(--text); }
+:root[data-theme="light"] .nav nav a.cta:hover { background: #000; }
+:root[data-theme="light"] .btn.primary { box-shadow: 0 10px 30px -12px rgba(217, 116, 153, .5); }
+:root[data-theme="light"] .cta-box .btn.primary { color: #0a0a0a; background: #eef0f3; }
+:root[data-theme="light"] .grid-bg { background-image: radial-gradient(rgba(16,20,30,.10) 1px, transparent 1px); }
+:root[data-theme="light"] .glow.a { background: rgba(111, 208, 184, .22); }
+:root[data-theme="light"] .glow.b { background: rgba(229, 143, 138, .2); }
+:root[data-theme="light"] h1 { background: linear-gradient(180deg, #12151c 30%, #4a5262 100%); -webkit-background-clip: text; background-clip: text; }
+:root[data-theme="light"] h2 { background: linear-gradient(180deg, #12151c 40%, #566070 100%); -webkit-background-clip: text; background-clip: text; }
+:root[data-theme="light"] .cta-box h2 { background: linear-gradient(180deg, #fff 40%, #9aa0ad 100%); -webkit-background-clip: text; background-clip: text; }
+:root[data-theme="light"] .grad-text { background: linear-gradient(100deg, #e08f62 0%, #d9688f 100%); -webkit-background-clip: text; background-clip: text; }
+:root[data-theme="light"] .heal-text { background: linear-gradient(100deg, #2fae94 0%, #5a8fe6 100%); -webkit-background-clip: text; background-clip: text; }
+:root[data-theme="light"] .pill-link { background: #fff; }
+:root[data-theme="light"] .card, :root[data-theme="light"] .fix, :root[data-theme="light"] .table-wrap {
+  background: #fff; box-shadow: 0 1px 2px rgba(16,20,30,.04), 0 18px 40px -26px rgba(16,20,30,.22);
+}
+:root[data-theme="light"] .card::before { background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 50%), rgba(111,208,184,.16), transparent 45%); }
+:root[data-theme="light"] .bars i { background: rgba(70, 190, 165, .7); }
+:root[data-theme="light"] .bars i.gone { background: rgba(16,20,30,.07); }
+:root[data-theme="light"] .loop circle:first-child { stroke: rgba(16,20,30,.08); }
+:root[data-theme="light"] .loop text { fill: #12151c; }
+:root[data-theme="light"] .chip.g, :root[data-theme="light"] .v.g { color: #1f8a72; border-color: rgba(47,174,148,.35); background: rgba(47,174,148,.09); }
+:root[data-theme="light"] .chip.r, :root[data-theme="light"] .v.r { color: #c2517a; border-color: rgba(217,104,143,.4); background: rgba(217,104,143,.09); }
+:root[data-theme="light"] .chip.a, :root[data-theme="light"] .v.a { color: #b7692f; border-color: rgba(224,143,98,.45); background: rgba(224,143,98,.1); }
+:root[data-theme="light"] .marquee .track span { color: #8a92a1; }
+:root[data-theme="light"] .eyebrow i { background: linear-gradient(100deg, #e08f62, #d9688f); }
+:root[data-theme="light"] .fix i { color: #fff; background: linear-gradient(100deg, #2fae94, #5a8fe6); }
+
+:root[data-theme="light"] .window, :root[data-theme="light"] .code, :root[data-theme="light"] .flow,
+:root[data-theme="light"] .json, :root[data-theme="light"] .heat, :root[data-theme="light"] .cta-box { color: var(--text); }
+:root[data-theme="light"] .logo path[stroke="#ffffff"] { stroke: #12151c; }
+
+/* theme toggle */
+.theme-btn { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; border: 1px solid var(--edge); background: var(--glass); color: var(--dim); cursor: pointer; margin-left: 4px; }
+.theme-btn:hover { color: var(--text); border-color: var(--edge-2); }
+.theme-btn svg { width: 17px; height: 17px; display: block; }
+.theme-btn .moon { display: none; }
+:root[data-theme="light"] .theme-btn .sun { display: none; }
+:root[data-theme="light"] .theme-btn .moon { display: block; }
 </style>
 </head>
 <body>
@@ -308,6 +377,7 @@ html, body { margin: 0; }
       <a href="#results">Results</a>
       <a href="#start">Docs</a>
       <a href="https://github.com/mac146/crosstrace">GitHub</a>
+      <button type="button" class="theme-btn" id="theme" aria-label="Switch to light mode" title="Switch theme"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       <a class="cta" href="#start">Get started</a>
     </nav>
   </div>
@@ -566,6 +636,22 @@ jobs:
 <script>
 (function () {
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+
+  // theme toggle
+  var root = document.documentElement, tbtn = document.getElementById('theme'), meta = document.querySelector('meta[name="theme-color"]');
+  function paint() {
+    var light = root.getAttribute('data-theme') === 'light';
+    tbtn.setAttribute('aria-label', light ? 'Switch to dark mode' : 'Switch to light mode');
+    if (meta) meta.setAttribute('content', light ? '#f6f7f9' : '#0b0c10');
+  }
+  tbtn.addEventListener('click', function () {
+    var next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('ct-theme', next); } catch (e) {}
+    paint();
+  });
+  paint();
 
   // record waveform bars
   var wave = document.getElementById('wave');
