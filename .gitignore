@@ -25,3 +25,7 @@ scripts/fault_clients/__pycache__/
 # packaging artifacts
 build/
 *.egg-info/
+
+# launch drafts (published elsewhere, not in the repo)
+LAUNCH_POST_*.md
+PROJECT_REPORT.md

@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta property="og:title" content="CrossTrace: a crash test for AI agents">
+<meta property="og:description" content="Replay real runs of your AI agent, break one model call at a time, and see what it does next. In CI, on every pull request.">
+<meta name="twitter:card" content="summary">
+<title>CrossTrace</title>
+<meta name="description" content="A crash test for AI agents: replay real runs, break one model call at a time, see what your agent does next.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: dark glass, two-signal colour system. Teal = healthy stream, orange->pink = the break.
+   Centered hero over a product window, then bento features, results, SDK heatmap, setup, glow CTA. Single dark theme, set explicitly. */
+:root {
+  --bg: #0b0c10;
+  --bg-2: #111318;
+  --glass: rgba(255, 255, 255, 0.035);
+  --glass-2: rgba(255, 255, 255, 0.06);
+  --edge: rgba(255, 255, 255, 0.08);
+  --edge-2: rgba(255, 255, 255, 0.14);
+  --text: #eef0f3;
+  --dim: #9096a3;
+  --faint: #5c616d;
+  --heal: #9be3d0;
+  --break: #f1b0a7;
+  --break-2: #eea5bd;
+  --grad: linear-gradient(100deg, #f4c3a2 0%, #f1b0a7 45%, #eea5bd 100%);
+  --grad-heal: linear-gradient(100deg, #9be3d0 0%, #a9c9ff 100%);
+  --sans: "Geist", "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font: 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 60; background: var(--bg); }
+.noise { position: fixed; inset: 0; pointer-events: none; z-index: 1; opacity: .05; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
+.band { position: relative; z-index: 2; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1180px; margin: 0 auto; }
+a { color: inherit; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--heal); outline-offset: 3px; border-radius: 8px; }
+code { font-family: var(--mono); font-size: .88em; }
+.grad-text { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.heal-text { background: var(--grad-heal); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* nav */
+.nav-band { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 50; padding-top: 14px; }
+.nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 10px 10px 18px;
+  background: rgba(10, 12, 16, .62); border: 1px solid var(--edge); border-radius: 14px;
+  -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
+.logo { display: flex; align-items: center; gap: 10px; font: 600 17px/1 var(--sans); letter-spacing: -0.02em; text-decoration: none; }
+.nav nav { display: flex; align-items: center; gap: 4px; font-size: 14px; }
+.nav nav a { text-decoration: none; color: var(--dim); padding: 8px 12px; border-radius: 8px; }
+.nav nav a:hover { color: var(--text); background: var(--glass-2); }
+.nav nav a.cta { color: #0a0a0a; background: var(--text); font-weight: 600; margin-left: 6px; }
+.nav nav a.cta:hover { background: #fff; }
+
+/* hero */
+.hero-band { overflow: hidden; }
+.glow { position: absolute; border-radius: 50%; filter: blur(90px); pointer-events: none; z-index: 0; }
+.glow.a { width: 620px; height: 420px; left: 50%; top: -120px; transform: translateX(-85%); background: rgba(155,227,208, .09); }
+.glow.b { width: 620px; height: 420px; left: 50%; top: -60px; transform: translateX(-5%); background: rgba(238,165,189, .08); }
+.grid-bg { position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background-image: radial-gradient(rgba(255,255,255,.09) 1px, transparent 1px); background-size: 24px 24px;
+  -webkit-mask-image: radial-gradient(ellipse 60% 55% at 50% 30%, #000 10%, transparent 75%); mask-image: radial-gradient(ellipse 60% 55% at 50% 30%, #000 10%, transparent 75%); }
+.hero { position: relative; z-index: 2; text-align: center; padding-block: 88px 40px; display: grid; justify-items: center; }
+.pill-link { display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px 6px 6px; border-radius: 999px; font-size: 13px; color: var(--dim); text-decoration: none;
+  background: var(--glass); border: 1px solid var(--edge); margin-bottom: 30px; }
+.pill-link b { font: 600 11px/1 var(--mono); color: #0a0a0a; background: var(--grad-heal); padding: 5px 9px; border-radius: 999px; letter-spacing: .03em; }
+.pill-link:hover { border-color: var(--edge-2); color: var(--text); }
+h1 { font: 700 clamp(44px, 7.4vw, 92px)/0.98 var(--sans); letter-spacing: -0.055em; margin: 0 0 26px; max-width: 13em; text-wrap: balance;
+  background: linear-gradient(180deg, #ffffff 30%, #a7acb8 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+h1 .grad-text { padding-right: .04em; }
+.lede { font-size: clamp(17px, 1.6vw, 20px); line-height: 1.6; color: var(--dim); max-width: 38em; margin: 0 0 36px; text-wrap: pretty; }
+.lede strong { color: var(--text); font-weight: 500; }
+.ctas { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 13px 22px; border-radius: 12px; font: 600 15px/1 var(--sans); text-decoration: none; cursor: pointer; border: 1px solid transparent; transition: transform .15s ease, box-shadow .2s ease; }
+.btn:hover { transform: translateY(-1px); }
+.btn.primary { color: #0a0a0a; background: var(--text); box-shadow: 0 0 0 1px rgba(255,255,255,.2), 0 10px 40px -10px rgba(241,176,167, .25); }
+.btn.secondary { color: var(--text); background: var(--glass); border-color: var(--edge); }
+.btn.secondary:hover { border-color: var(--edge-2); }
+.cmd { margin-top: 22px; font: 13px/1 var(--mono); color: var(--faint); }
+.cmd span { color: var(--dim); }
+
+/* product window */
+.window-band { padding-bottom: 40px; }
+.window-wrap { position: relative; max-width: 1080px; margin: 24px auto 0; }
+.window-wrap::before { content: ""; position: absolute; inset: -1px; border-radius: 20px; padding: 1px; z-index: 0;
+  background: linear-gradient(140deg, rgba(155,227,208,.55), rgba(255,255,255,.06) 35%, rgba(255,255,255,.04) 65%, rgba(238,165,189,.6));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+.window-wrap::after { content: ""; position: absolute; left: 10%; right: 10%; bottom: -40px; height: 120px; z-index: -1; filter: blur(60px);
+  background: linear-gradient(90deg, rgba(155,227,208,.25), rgba(238,165,189,.3)); }
+.window { position: relative; z-index: 1; border-radius: 20px; overflow: hidden; background: linear-gradient(180deg, #0e1117, #090b0f); box-shadow: 0 40px 120px -30px rgba(0,0,0,.9); }
+.win-bar { display: flex; align-items: center; gap: 14px; padding: 13px 16px; border-bottom: 1px solid var(--edge); }
+.dots { display: flex; gap: 7px; } .dots i { width: 11px; height: 11px; border-radius: 50%; background: #2a2d35; display: block; }
+.win-title { flex: 1; text-align: center; font: 12px/1 var(--mono); color: var(--faint); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.win-bar button { font: 600 12px/1 var(--mono); color: var(--text); background: var(--glass-2); border: 1px solid var(--edge); padding: 7px 11px; border-radius: 8px; cursor: pointer; flex: none; }
+.win-bar button:hover { border-color: var(--edge-2); }
+.panes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.pane { padding: 20px 22px 24px; min-width: 0; overflow-x: auto; }
+.pane + .pane { border-left: 1px solid var(--edge); }
+.pane-h { font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+.pane-h::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--heal); box-shadow: 0 0 10px var(--heal); }
+.pane.report .pane-h::before { background: var(--break-2); box-shadow: 0 0 10px var(--break-2); }
+.ev { font: 12.5px/1.9 var(--mono); white-space: pre; color: #c9ced8; transition: opacity .3s ease, transform .3s ease; }
+.ev .k { color: var(--faint); } .ev .arg { color: var(--heal); }
+.ev.ghost { color: #3b3f48; text-decoration: line-through; text-decoration-color: rgba(238,165,189,.6); }
+.cut { position: relative; height: 2px; margin: 14px 0; background: var(--grad); box-shadow: 0 0 18px rgba(241,176,167, .8); transition: opacity .3s ease; }
+.cut span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase;
+  color: #fff; background: #1a0d12; border: 1px solid rgba(238,165,189,.6); padding: 5px 9px; border-radius: 999px; white-space: nowrap; }
+.res { font: 12.5px/1.95 var(--mono); white-space: pre; color: #c9ced8; transition: opacity .3s ease, transform .3s ease; }
+.res .x { color: var(--break-2); } .res .ok { color: var(--heal); } .res .d { color: var(--faint); } .res .w { color: #fff; }
+.res-sum { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--edge); font: 12.5px/1.7 var(--mono); color: var(--dim); transition: opacity .3s ease; }
+.res-sum b { color: var(--break-2); font-weight: 600; }
+.hidden-step { opacity: 0; transform: translateY(5px); }
+
+/* works with */
+.works { padding-block: 48px 24px; text-align: center; }
+.works p { margin: 0 0 22px; font-size: 13px; color: var(--faint); }
+.marquee { position: relative; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+.track { display: flex; gap: 56px; width: max-content; animation: slide 36s linear infinite; }
+.track span { font: 500 18px/1 var(--sans); letter-spacing: -0.02em; color: #6d727e; white-space: nowrap; }
+@keyframes slide { to { transform: translateX(-50%); } }
+
+/* sections */
+.sec { padding-block: 110px; }
+.eyebrow { display: inline-flex; align-items: center; gap: 8px; font: 500 13px/1 var(--mono); color: var(--dim); margin: 0 0 18px; }
+.eyebrow i { width: 7px; height: 7px; border-radius: 2px; background: var(--grad); display: block; }
+h2 { font: 700 clamp(34px, 4.6vw, 56px)/1.04 var(--sans); letter-spacing: -0.045em; margin: 0 0 18px; max-width: 16em; text-wrap: balance;
+  background: linear-gradient(180deg, #fff 40%, #9aa0ad 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.sub { font-size: 18px; color: var(--dim); max-width: 38em; margin: 0 0 56px; text-wrap: pretty; }
+.center { text-align: center; } .center h2, .center .sub { margin-left: auto; margin-right: auto; }
+
+/* flow diagram */
+.flow { position: relative; border-radius: 22px; border: 1px solid var(--edge); background: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.04), transparent 60%), var(--bg-2); overflow: hidden; }
+.flow canvas { display: block; width: 100%; height: 300px; }
+.nodes { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; pointer-events: none; }
+.node { justify-self: center; text-align: center; display: grid; gap: 8px; justify-items: center; }
+.node .box { padding: 14px 18px; border-radius: 14px; background: rgba(12, 14, 19, .85); border: 1px solid var(--edge-2); font: 600 15px/1 var(--sans); letter-spacing: -0.01em;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); box-shadow: 0 10px 30px -10px rgba(0,0,0,.8); }
+.node.mid .box { border-color: rgba(241,176,167, .25); box-shadow: 0 0 0 4px rgba(238,165,189, .08), 0 0 40px -6px rgba(241,176,167, .5); }
+.node small { font: 12px/1.3 var(--mono); color: var(--faint); }
+.flow-legend { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; padding: 16px; border-top: 1px solid var(--edge); font: 12px/1 var(--mono); color: var(--dim); }
+.flow-legend span { display: inline-flex; align-items: center; gap: 8px; }
+.flow-legend i { width: 18px; height: 3px; border-radius: 2px; display: block; }
+
+/* bento */
+.bento { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+.card { position: relative; grid-column: span 3; border-radius: 20px; border: 1px solid var(--edge); background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.01)); overflow: hidden; padding: 28px; display: grid; gap: 10px; align-content: start; min-height: 300px; }
+.card.wide { grid-column: span 4; } .card.narrow { grid-column: span 2; }
+.card::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .3s ease;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 50%), rgba(255,255,255,.07), transparent 45%); }
+.card:hover::before { opacity: 1; }
+.card .step { font: 500 12px/1 var(--mono); color: var(--faint); }
+.card h3 { margin: 0; font: 600 22px/1.2 var(--sans); letter-spacing: -0.03em; }
+.card p { margin: 0; color: var(--dim); font-size: 15px; max-width: 30em; }
+.card code { color: var(--text); background: var(--glass-2); padding: 2px 6px; border-radius: 5px; }
+.viz { margin-top: auto; padding-top: 22px; }
+/* record viz */
+.wave { display: flex; align-items: center; gap: 4px; height: 70px; }
+.wave i { flex: 1; border-radius: 3px; background: var(--grad-heal); opacity: .85; animation: wave 1.6s ease-in-out infinite; transform-origin: center; }
+@keyframes wave { 0%, 100% { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
+/* replay viz */
+.loop { display: flex; align-items: center; justify-content: center; height: 90px; }
+.loop svg { width: 90px; height: 90px; }
+.spin { transform-origin: 45px 45px; animation: spin 5s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* break viz */
+.bars { display: flex; gap: 6px; align-items: center; height: 70px; }
+.bars i { height: 12px; flex: 1; border-radius: 6px; background: rgba(155,227,208, .75); }
+.bars i.gone { background: rgba(255,255,255,.06); }
+.bars .snap { flex: none; width: 3px; height: 54px; border-radius: 2px; background: var(--grad); box-shadow: 0 0 22px 4px rgba(241,176,167, .7); animation: flick 2.4s ease-in-out infinite; }
+@keyframes flick { 0%, 100% { opacity: 1; } 45% { opacity: .35; } 50% { opacity: 1; } 55% { opacity: .5; } }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font: 600 11px/1 var(--mono); letter-spacing: .05em; padding: 8px 10px; border-radius: 8px; border: 1px solid; }
+.chip.g { color: var(--heal); border-color: rgba(155,227,208,.35); background: rgba(155,227,208,.08); }
+.chip.r { color: #f3b6c7; border-color: rgba(238,165,189,.4); background: rgba(238,165,189,.08); }
+.chip.a { color: #f1cba7; border-color: rgba(244,195,162,.4); background: rgba(244,195,162,.08); }
+
+/* story */
+.story { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: center; }
+.json { position: relative; border-radius: 22px; border: 1px solid var(--edge); background: var(--bg-2); padding: 48px 28px; overflow: hidden; text-align: center; }
+.json::before { content: ""; position: absolute; inset: auto 0 -60% 0; height: 100%; background: radial-gradient(ellipse at 50% 0%, rgba(238,165,189, .22), transparent 60%); pointer-events: none; }
+.json .label { font: 500 12px/1 var(--mono); color: var(--faint); margin-bottom: 16px; }
+.json .line { font: 600 clamp(22px, 3.2vw, 36px)/1.2 var(--mono); letter-spacing: -0.02em; white-space: nowrap; }
+.json .sent { color: #e5e7eb; }
+.json .got { color: #e5e7eb; position: relative; display: inline-block; }
+.json .lost { color: #3a3e47; text-decoration: line-through; text-decoration-color: var(--break-2); text-decoration-thickness: 3px; }
+.json .arrow { margin: 18px 0; font: 12px/1 var(--mono); color: var(--break-2); letter-spacing: .14em; text-transform: uppercase; }
+.json .call { margin-top: 26px; display: inline-flex; gap: 10px; align-items: center; font: 500 14px/1 var(--mono); padding: 10px 14px; border-radius: 10px; background: rgba(238,165,189,.1); border: 1px solid rgba(238,165,189,.35); color: #f5cfda; }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 32px; margin-top: 36px; }
+.stat b { display: block; font: 700 40px/1 var(--sans); letter-spacing: -0.05em; margin-bottom: 8px; }
+.stat span { color: var(--dim); font-size: 15px; }
+
+/* results table */
+.table-wrap { border-radius: 20px; border: 1px solid var(--edge); background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.008)); overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; min-width: 720px; }
+th, td { text-align: left; padding: 18px 22px; border-bottom: 1px solid var(--edge); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font: 500 12px/1 var(--mono); color: var(--faint); }
+td { font-size: 15px; color: var(--dim); }
+td code { color: var(--text); background: var(--glass-2); padding: 2px 6px; border-radius: 5px; }
+td.f { font: 500 13px/1.5 var(--mono); color: var(--text); white-space: nowrap; }
+td.n { font: 600 14px/1.5 var(--mono); color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.v { display: inline-block; font: 600 11px/1 var(--mono); letter-spacing: .05em; padding: 6px 9px; border-radius: 7px; border: 1px solid; white-space: nowrap; margin: 0 4px 4px 0; }
+.v.r { color: #f3b6c7; border-color: rgba(238,165,189,.4); background: rgba(238,165,189,.08); }
+.v.g { color: var(--heal); border-color: rgba(155,227,208,.35); background: rgba(155,227,208,.08); }
+.v.a { color: #f1cba7; border-color: rgba(244,195,162,.4); background: rgba(244,195,162,.08); }
+.takeaway { margin: 40px auto 0; text-align: center; font: 600 clamp(22px, 2.6vw, 30px)/1.3 var(--sans); letter-spacing: -0.03em; max-width: 26em; color: var(--dim); }
+.takeaway em { font-style: normal; color: var(--text); }
+
+/* heatmap */
+.heat { border-radius: 20px; border: 1px solid var(--edge); background: var(--bg-2); padding: 26px; overflow-x: auto; }
+.hm { display: grid; grid-template-columns: 150px repeat(7, minmax(92px, 1fr)); gap: 8px; min-width: 860px; align-items: stretch; }
+.hm .h { font: 500 11.5px/1.3 var(--mono); color: var(--faint); text-align: center; align-self: end; padding-bottom: 6px; }
+.hm .rl { font: 500 13px/1.3 var(--mono); color: var(--text); display: flex; align-items: center; }
+.hm .c { height: 54px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font: 600 11px/1 var(--mono); letter-spacing: .05em; }
+.hm .c.bad { color: #f8dde5; background: linear-gradient(160deg, rgba(238,165,189,.35), rgba(241,176,167,.18)); box-shadow: inset 0 0 0 1px rgba(238,165,189,.35); }
+.hm .c.ok { color: #d8f4ec; background: linear-gradient(160deg, rgba(155,227,208,.28), rgba(169,201,255,.12)); box-shadow: inset 0 0 0 1px rgba(155,227,208,.35); }
+.note { margin: 18px 0 0; font-size: 13px; color: var(--faint); text-align: center; }
+
+/* start */
+.start { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.code { border-radius: 18px; border: 1px solid var(--edge); background: var(--bg-2); overflow: hidden; min-width: 0; display: flex; flex-direction: column; }
+.code .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--edge); }
+.code .bar span { font: 12px/1.3 var(--mono); color: var(--faint); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code button { flex: none; font: 600 12px/1 var(--mono); background: var(--glass-2); border: 1px solid var(--edge); color: var(--text); padding: 7px 11px; border-radius: 8px; cursor: pointer; }
+.code button:hover { border-color: var(--edge-2); }
+.code pre { margin: 0; padding: 20px; overflow-x: auto; font: 13px/1.85 var(--mono); color: #d7dbe3; flex: 1; }
+.code .c { color: var(--faint); } .code .p { color: var(--heal); } .code .s { color: #f1cba7; }
+.fixes { margin-top: 14px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.fix { border-radius: 18px; border: 1px solid var(--edge); background: var(--glass); padding: 22px; display: grid; gap: 8px; align-content: start; }
+.fix i { font-style: normal; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; font: 600 12px/1 var(--mono); color: #0a0a0a; background: var(--grad-heal); }
+.fix b { font: 600 16px/1.3 var(--sans); letter-spacing: -0.02em; }
+.fix span { color: var(--dim); font-size: 14px; }
+.fix code { color: var(--text); }
+
+/* cta */
+.cta-box { position: relative; border-radius: 28px; border: 1px solid var(--edge); overflow: hidden; padding: 88px 28px; text-align: center; background: var(--bg-2); }
+.cta-box::before { content: ""; position: absolute; left: 50%; top: 100%; width: 900px; height: 500px; transform: translate(-50%, -55%); border-radius: 50%; filter: blur(70px);
+  background: conic-gradient(from 180deg, rgba(155,227,208,.45), rgba(169,201,255,.25), rgba(238,165,189,.45), rgba(244,195,162,.4), rgba(155,227,208,.45)); }
+.cta-box > * { position: relative; }
+.cta-box p { color: var(--dim); font-size: 18px; max-width: 34em; margin: 0 auto 32px; }
+.limits { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.limits span { font: 12px/1.3 var(--mono); color: var(--dim); padding: 8px 12px; border-radius: 999px; background: rgba(0,0,0,.35); border: 1px solid var(--edge); }
+.foot { padding-block: 36px 48px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; font: 13px/1.4 var(--mono); color: var(--faint); }
+.foot a { text-decoration: none; } .foot a:hover { color: var(--text); }
+
+@media (max-width: 960px) {
+  .panes { grid-template-columns: minmax(0, 1fr); }
+  .pane + .pane { border-left: 0; border-top: 1px solid var(--edge); }
+  .card, .card.wide, .card.narrow { grid-column: span 6; min-height: 0; }
+  .story { grid-template-columns: minmax(0, 1fr); gap: 36px; }
+  .start { grid-template-columns: minmax(0, 1fr); }
+  .fixes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sec { padding-block: 80px; }
+}
+@media (max-width: 600px) {
+  .nav nav a:not(.cta) { display: none; }
+  .hero { padding-block: 56px 28px; }
+  .fixes { grid-template-columns: minmax(0, 1fr); }
+  .flow canvas { height: 240px; }
+  .node .box { padding: 10px 10px; font-size: 13px; }
+  .node small { display: none; }
+  .stat b { font-size: 32px; }
+  .sec { padding-block: 64px; }
+  .cta-box { padding: 64px 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .track, .wave i, .spin, .bars .snap { animation: none; }
+  .ev, .res, .cut, .res-sum { transition: none; }
+  html { scroll-behavior: auto; }
+}
+
+html, body { margin: 0; }
+</style>
+</head>
+<body>
+
+<div class="noise" aria-hidden="true"></div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="lg-brand" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9be3d0"/><stop offset=".5" stop-color="#a9c9ff"/><stop offset="1" stop-color="#eea5bd"/></linearGradient>
+    <linearGradient id="lg-heal" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#9be3d0"/><stop offset="1" stop-color="#a9c9ff"/></linearGradient>
+  </defs>
+</svg>
+
+<!-- nav -->
+<div class="band nav-band">
+  <div class="wrap nav">
+    <a class="logo" href="#top" aria-label="CrossTrace home">
+      <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M2 12h7" stroke="url(#lg-heal)" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+        <path d="M15 12h7" stroke="#eea5bd" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+        <path d="M10 18.5L14 5.5" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+      </svg>
+      CrossTrace
+    </a>
+    <nav aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#results">Results</a>
+      <a href="#start">Docs</a>
+      <a href="https://github.com/mac146/crosstrace">GitHub</a>
+      <a class="cta" href="#start">Get started</a>
+    </nav>
+  </div>
+</div>
+
+<!-- hero -->
+<div class="band hero-band" id="top">
+  <div class="glow a" aria-hidden="true"></div>
+  <div class="glow b" aria-hidden="true"></div>
+  <div class="grid-bg" aria-hidden="true"></div>
+  <div class="wrap hero">
+    <a class="pill-link" href="#story"><b>NEW</b> Tested on a real LangGraph agent →</a>
+    <h1>Your agent said it worked. <span class="grad-text">It didn't.</span></h1>
+    <p class="lede">CrossTrace is a crash test for AI agents. It replays real runs of your agent and <strong>breaks one model call at a time</strong>, the way providers and networks really break, then tells you exactly what your agent did next. In CI, on every pull request.</p>
+    <div class="ctas">
+      <a class="btn primary" href="#start">Crash-test your agent</a>
+      <a class="btn secondary" href="https://github.com/mac146/crosstrace">Star on GitHub</a>
+    </div>
+    <p class="cmd"><span>$</span> pip install git+https://github.com/mac146/crosstrace</p>
+  </div>
+
+  <div class="wrap window-band">
+    <div class="window-wrap">
+      <figure class="window" style="margin:0" aria-label="A stream cut halfway through a tool call, and the CrossTrace report">
+        <div class="win-bar">
+          <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div class="win-title">crosstrace test · langgraph_support</div>
+          <button type="button" id="replay">▶ Replay</button>
+        </div>
+        <div class="panes" id="wire">
+          <div class="pane">
+            <p class="pane-h">Model stream · exchange 0</p>
+            <div class="ev" data-step="1"><span class="k">data:</span> {"tool_calls":[{"name":"get_order"}]}</div>
+            <div class="ev" data-step="2"><span class="k">data:</span> {"arguments":<span class="arg">"{\"order_id\": "</span>}</div>
+            <div class="ev" data-step="3"><span class="k">data:</span> {"arguments":<span class="arg">"4</span></div>
+            <div class="cut" data-step="4"><span>connection cut</span></div>
+            <div class="ev ghost" data-step="5"><span class="k">data:</span> {"arguments":"2}"}</div>
+            <div class="ev ghost" data-step="5"><span class="k">data:</span> {"finish_reason":"tool_calls"}</div>
+            <div class="ev ghost" data-step="5"><span class="k">data:</span> [DONE]</div>
+          </div>
+          <div class="pane report">
+            <p class="pane-h">Report</p>
+            <div class="res" data-step="6"><span class="x">✗</span> <span class="w">tool_args_cut</span>       <span class="x">SILENT 3/3</span></div>
+            <div class="res" data-step="6"><span class="d">  ran get_order(order_id=4)</span></div>
+            <div class="res" data-step="7"><span class="x">✗</span> <span class="w">stream_stall</span>        <span class="x">HANG 5/5</span></div>
+            <div class="res" data-step="7"><span class="x">✗</span> <span class="w">stream_cut_clean</span>    <span class="x">PARTIAL 2/5</span></div>
+            <div class="res" data-step="8"><span class="ok">✓</span> <span class="w">server_error</span>        <span class="ok">RECOVERED 5/5</span></div>
+            <div class="res" data-step="8"><span class="ok">✓</span> <span class="w">rate_limit</span>          <span class="ok">RECOVERED 5/5</span></div>
+            <div class="res" data-step="8"><span class="ok">✓</span> <span class="w">context_length</span>      <span class="ok">SURFACED 5/5</span></div>
+            <div class="res-sum" data-step="9"><b>10 failing trials</b> · exit code 1<br>rerun: crosstrace test --fault tool_args_cut --at 0</div>
+          </div>
+        </div>
+      </figure>
+    </div>
+  </div>
+</div>
+
+<!-- works with -->
+<div class="band">
+  <div class="wrap works">
+    <p>Works with your stack, no code changes</p>
+    <div class="marquee" aria-label="Supported SDKs and frameworks: OpenAI SDK, Anthropic SDK, LangChain, LangGraph, LiteLLM, pydantic-ai, Vercel AI SDK">
+      <div class="track" aria-hidden="true">
+        <span>OpenAI SDK</span><span>Anthropic SDK</span><span>LangChain</span><span>LangGraph</span><span>LiteLLM</span><span>pydantic-ai</span><span>Vercel AI SDK</span><span>GitHub Actions</span>
+        <span>OpenAI SDK</span><span>Anthropic SDK</span><span>LangChain</span><span>LangGraph</span><span>LiteLLM</span><span>pydantic-ai</span><span>Vercel AI SDK</span><span>GitHub Actions</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<main>
+  <!-- flow -->
+  <div class="band" id="how">
+    <div class="wrap sec center">
+      <p class="eyebrow"><i></i>How it works</p>
+      <h2>A proxy that breaks things on purpose</h2>
+      <p class="sub">CrossTrace sits between your agent and the model provider. Your agent only reads its base URL from the environment, so your real SDK code runs exactly as in production.</p>
+      <div class="flow">
+        <canvas id="flow" aria-label="Animated diagram: model responses stream from the provider through CrossTrace to your agent; CrossTrace cuts one stream" role="img"></canvas>
+        <div class="nodes" aria-hidden="true">
+          <div class="node"><div class="box">Your agent</div><small>unchanged code</small></div>
+          <div class="node mid"><div class="box">CrossTrace</div><small>record · replay · break</small></div>
+          <div class="node"><div class="box">Model provider</div><small>only when recording</small></div>
+        </div>
+        <div class="flow-legend">
+          <span><i style="background:linear-gradient(90deg,#9be3d0,#a9c9ff)"></i>healthy stream</span>
+          <span><i style="background:linear-gradient(90deg,#f4c3a2,#eea5bd)"></i>injected fault</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- bento -->
+  <div class="band">
+    <div class="wrap" style="padding-bottom:110px">
+      <div class="bento">
+        <div class="card wide spot">
+          <span class="step">01 · Record</span>
+          <h3>Capture real runs, once</h3>
+          <p>Run your agent for real, once per input. Every request and the provider's exact response bytes are saved. API keys and headers never are.</p>
+          <div class="viz"><div class="wave" aria-hidden="true" id="wave"></div></div>
+        </div>
+        <div class="card narrow spot">
+          <span class="step">02 · Replay</span>
+          <h3>Offline, at $0</h3>
+          <p>The run must replay exactly before any fault, or CrossTrace names the field to mask.</p>
+          <div class="viz loop" aria-hidden="true">
+            <svg viewBox="0 0 90 90"><circle cx="45" cy="45" r="34" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="6"/>
+              <g class="spin"><circle cx="45" cy="45" r="34" fill="none" stroke="url(#lg-heal)" stroke-width="6" stroke-linecap="round" stroke-dasharray="70 144"/></g>
+              <text x="45" y="50" text-anchor="middle" fill="#eef0f3" font-family="Geist Mono, monospace" font-size="13" font-weight="600">$0</text></svg>
+          </div>
+        </div>
+        <div class="card narrow spot">
+          <span class="step">03 · Break</span>
+          <h3>One call at a time</h3>
+          <p>Cut streams, stalls, resets, <code>429</code>s, overloads. Byte-level, at every call of every path.</p>
+          <div class="viz"><div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><span class="snap"></span><i class="gone"></i><i class="gone"></i></div></div>
+        </div>
+        <div class="card wide spot">
+          <span class="step">04 · Judge</span>
+          <h3>Verdicts from the agent's next move</h3>
+          <p>Did it retry, stop with an error, or carry on as if nothing happened? No AI judge and no comparing free text, so the same trial gives the same verdict every time.</p>
+          <div class="viz chips" aria-hidden="true">
+            <span class="chip g">RECOVERED</span><span class="chip g">SURFACED</span><span class="chip r">SILENT</span><span class="chip r">PARTIAL</span><span class="chip r">HANG</span><span class="chip r">RETRY_STORM</span><span class="chip r">WRONG_RETRY</span><span class="chip a">ENDED_EARLY</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- story -->
+  <div class="band" id="story">
+    <div class="wrap sec story" style="padding-top:0">
+      <div>
+        <p class="eyebrow"><i></i>Real result</p>
+        <h2>The model asked for order 42. The agent looked up order 4.</h2>
+        <p class="sub" style="margin-bottom:0">A stock LangGraph agent: <code>create_react_agent</code>, streaming <code>ChatOpenAI</code>, default settings, a real model. The stream broke inside a tool call. LangChain completed the half-received JSON, and the agent ran the tool with no error and exit code 0.</p>
+        <div class="stats">
+          <div class="stat"><b class="grad-text">3/3</b><span>cut tool calls run anyway</span></div>
+          <div class="stat"><b class="grad-text">10 min</b><span>hang on a stalled stream</span></div>
+          <div class="stat"><b class="heal-text">15/15</b><span>HTTP errors handled by SDK retries</span></div>
+          <div class="stat"><b class="heal-text">38</b><span>trials, about 2 minutes, offline</span></div>
+        </div>
+      </div>
+      <div class="json">
+        <div class="label">what the model sent</div>
+        <div class="line sent">{"order_id": 42}</div>
+        <div class="arrow">↓ stream cut ↓</div>
+        <div class="label">what the agent used</div>
+        <div class="line"><span class="got">{"order_id": 4</span><span class="lost">2}</span></div>
+        <div class="call">→ get_order(order_id=4) · exit 0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- results -->
+  <div class="band" id="results">
+    <div class="wrap sec" style="padding-top:0">
+      <div class="center">
+        <p class="eyebrow"><i></i>Full report</p>
+        <h2>Every fault, every model call</h2>
+        <p class="sub">Recorded once against a real model, replayed 38 times with one fault per trial. A fresh recording gave the same verdicts.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fault</th><th>Verdict</th><th>Trials</th><th>What the agent did</th></tr></thead>
+          <tbody>
+            <tr><td class="f">tool_args_cut</td><td><span class="v r">SILENT</span></td><td class="n">3/3</td><td>Ran tools on cut arguments: <code>get_order(order_id=4)</code>, <code>get_order({})</code>, <code>track_shipment("BD1234")</code>.</td></tr>
+            <tr><td class="f">stream_stall</td><td><span class="v r">HANG</span></td><td class="n">5/5</td><td>No read timeout by default. With <code>timeout=30</code> it errors out but never recovers: SDK retries stop once headers arrive.</td></tr>
+            <tr><td class="f">stream_cut_clean</td><td><span class="v r">PARTIAL</span><span class="v a">ENDED_EARLY</span></td><td class="n">5/5</td><td>Printed "Your order 42" as the whole answer, or nothing at all, and exited 0.</td></tr>
+            <tr><td class="f">500 · 429 · reset</td><td><span class="v g">RECOVERED</span></td><td class="n">15/15</td><td>Built-in SDK retries handled every error before the stream started.</td></tr>
+            <tr><td class="f">overloaded · context_length</td><td><span class="v g">SURFACED</span></td><td class="n">10/10</td><td>Stopped with a clear error.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="takeaway">Failures before the response starts get handled. <em>Failures after it starts get hidden.</em></p>
+    </div>
+  </div>
+
+  <!-- heatmap -->
+  <div class="band">
+    <div class="wrap sec center" style="padding-top:0">
+      <p class="eyebrow"><i></i>Across SDKs</p>
+      <h2>It isn't one framework</h2>
+      <p class="sub">The same two faults through seven SDK setups on default settings.</p>
+      <div class="heat">
+        <div class="hm" role="table" aria-label="SDK results">
+          <div class="h" role="columnheader"></div>
+          <div class="h" role="columnheader">openai-python</div><div class="h" role="columnheader">anthropic-python</div><div class="h" role="columnheader">openai-node</div><div class="h" role="columnheader">anthropic-ts</div><div class="h" role="columnheader">Vercel AI SDK</div><div class="h" role="columnheader">anthropic tools</div><div class="h" role="columnheader">langchain tools</div>
+          <div class="rl" role="rowheader">stream ends early</div>
+          <div class="c bad">SILENT</div><div class="c bad">SILENT</div><div class="c bad">SILENT</div><div class="c ok">ERROR</div><div class="c bad">SILENT</div><div class="c bad">SILENT</div><div class="c bad">SILENT</div>
+          <div class="rl" role="rowheader">stream stalls</div>
+          <div class="c bad">HANG</div><div class="c bad">HANG</div><div class="c bad">HANG</div><div class="c bad">HANG</div><div class="c bad">HANG</div><div class="c bad">HANG</div><div class="c bad">HANG</div>
+        </div>
+      </div>
+      <p class="note">HANG: no answer or error within the 20 s test window. The Python SDKs' default read timeout is 10 minutes.</p>
+    </div>
+  </div>
+
+  <!-- start -->
+  <div class="band" id="start">
+    <div class="wrap sec" style="padding-top:0">
+      <div class="center">
+        <p class="eyebrow"><i></i>Get started</p>
+        <h2>Four commands. Then it runs on every PR.</h2>
+        <p class="sub">Commit the recordings and CI replays them without API keys. The report lands in the job summary, with the fix for your SDK.</p>
+      </div>
+      <div class="start">
+        <div class="code">
+          <div class="bar"><span>terminal</span><button type="button" data-copy="cli">Copy</button></div>
+<pre id="cli"><span class="p">$</span> pip install git+https://github.com/mac146/crosstrace
+<span class="p">$</span> crosstrace init --command <span class="s">"python agent.py {input}"</span>
+<span class="p">$</span> crosstrace record   <span class="c"># real run, once</span>
+<span class="p">$</span> crosstrace test     <span class="c"># offline, with faults</span></pre>
+        </div>
+        <div class="code">
+          <div class="bar"><span>.github/workflows/crosstrace.yml</span><button type="button" data-copy="ci">Copy</button></div>
+<pre id="ci">on: [pull_request]
+jobs:
+  resilience:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mac146/crosstrace@main
+        with:
+          install: pip install -r requirements.txt</pre>
+        </div>
+      </div>
+      <div class="fixes">
+        <div class="fix"><i>1</i><b>Check the stream finished</b><span>Look for <code>finish_reason</code> or <code>stop_reason</code> after every stream.</span></div>
+        <div class="fix"><i>2</i><b>Never run a cut tool call</b><span>Validate arguments against the schema first.</span></div>
+        <div class="fix"><i>3</i><b>Time out, then retry</b><span>A read timeout plus your own retry around the call.</span></div>
+        <div class="fix"><i>4</i><b>Fail loudly</b><span>If the agent can't finish, exit non-zero.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- cta -->
+  <div class="band">
+    <div class="wrap" style="padding-bottom:40px">
+      <div class="cta-box">
+        <p class="eyebrow" style="justify-content:center"><i></i>Open source · MIT · v0.1</p>
+        <h2 style="margin-left:auto;margin-right:auto">Find out what your agent hides.</h2>
+        <p>Run it on your agent and tell me what breaks, or what CrossTrace gets wrong. An issue is the most useful thing you can send.</p>
+        <div class="ctas"><a class="btn primary" href="https://github.com/mac146/crosstrace">Get CrossTrace</a><a class="btn secondary" href="https://github.com/mac146/crosstrace/issues">Open an issue</a></div>
+        <div class="limits"><span>Model calls only (OpenAI, Anthropic APIs)</span><span>MCP tool faults next</span><span>HTTP/1.1 to the local proxy</span></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="band">
+  <div class="wrap foot"><span>© CrossTrace · MIT license</span><a href="https://github.com/mac146/crosstrace">github.com/mac146/crosstrace</a></div>
+</div>
+
+<script>
+(function () {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // record waveform bars
+  var wave = document.getElementById('wave');
+  for (var i = 0; i < 48; i++) {
+    var b = document.createElement('i');
+    b.style.height = (18 + Math.round(52 * Math.abs(Math.sin(i * 0.55) * Math.cos(i * 0.21)))) + 'px';
+    b.style.animationDelay = (-(i * 0.07)).toFixed(2) + 's';
+    wave.appendChild(b);
+  }
+
+  // spotlight cards
+  document.querySelectorAll('.spot').forEach(function (c) {
+    c.addEventListener('pointermove', function (e) {
+      var r = c.getBoundingClientRect();
+      c.style.setProperty('--mx', (e.clientX - r.left) + 'px');
+      c.style.setProperty('--my', (e.clientY - r.top) + 'px');
+    });
+  });
+
+  // product window replay
+  var wire = document.getElementById('wire');
+  var timers = [];
+  function play() {
+    timers.forEach(clearTimeout); timers = [];
+    if (reduce) return;
+    var steps = wire.querySelectorAll('[data-step]');
+    steps.forEach(function (el) { el.classList.add('hidden-step'); });
+    var d = { 1: 200, 2: 600, 3: 1000, 4: 1500, 5: 1800, 6: 2400, 7: 2800, 8: 3200, 9: 3700 };
+    steps.forEach(function (el) { timers.push(setTimeout(function () { el.classList.remove('hidden-step'); }, d[el.getAttribute('data-step')])); });
+  }
+  document.getElementById('replay').addEventListener('click', play);
+
+  // flow canvas: packets stream from provider (right) through CrossTrace (middle) to the agent (left); every few seconds one stream is cut
+  var cv = document.getElementById('flow');
+  var ctx = cv.getContext('2d');
+  var W = 0, H = 0, dpr = 1, packets = [], sparks = [], t = 0, cutUntil = 0, nextCut = 1.4;
+  function size() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var r = cv.getBoundingClientRect(); W = r.width; H = r.height;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  function xs() { return [W / 6, W / 2, W * 5 / 6]; }
+  function lanes() { return [-18, -6, 6, 18]; }
+  function spawn() {
+    var L = lanes();
+    packets.push({ x: xs()[2], lane: L[Math.floor(Math.random() * L.length)], v: 90 + Math.random() * 60, cut: false, life: 1 });
+  }
+  function grad(x0, x1, a, b) { var g = ctx.createLinearGradient(x0, 0, x1, 0); g.addColorStop(0, a); g.addColorStop(1, b); return g; }
+  function draw(dt) {
+    ctx.clearRect(0, 0, W, H);
+    var X = xs(), cy = H / 2, cutting = t < cutUntil;
+    // rails
+    lanes().forEach(function (l) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(X[0], cy + l); ctx.lineTo(X[2], cy + l); ctx.stroke();
+    });
+    // glowing rails
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = grad(X[1], X[2], 'rgba(155,227,208,0.35)', 'rgba(169,201,255,0.18)');
+    ctx.beginPath(); ctx.moveTo(X[1], cy); ctx.lineTo(X[2], cy); ctx.stroke();
+    ctx.strokeStyle = cutting ? grad(X[0], X[1], 'rgba(238,165,189,0.1)', 'rgba(241,176,167,0.55)') : grad(X[0], X[1], 'rgba(169,201,255,0.18)', 'rgba(155,227,208,0.35)');
+    ctx.beginPath(); ctx.moveTo(X[0], cy); ctx.lineTo(X[1], cy); ctx.stroke();
+    // packets
+    for (var i = packets.length - 1; i >= 0; i--) {
+      var p = packets[i];
+      var prevX = p.x;
+      if (!p.cut) p.x -= p.v * dt;
+      if (!p.cut && cutting && prevX > X[1] && p.x <= X[1]) {
+        p.cut = true; p.x = X[1] + 2;
+        for (var s = 0; s < 6; s++) sparks.push({ x: X[1], y: cy + p.lane, vx: -40 - Math.random() * 120, vy: (Math.random() - .5) * 140, life: 1 });
+      }
+      if (p.cut) p.life -= dt * 2.2;
+      if (p.x < X[0] || p.life <= 0) { packets.splice(i, 1); continue; }
+      var y = cy + p.lane, len = 26;
+      var g = p.cut ? grad(p.x, p.x + len, 'rgba(238,165,189,' + p.life + ')', 'rgba(244,195,162,0)') : grad(p.x, p.x + len, 'rgba(155,227,208,1)', 'rgba(169,201,255,0)');
+      ctx.strokeStyle = g; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(p.x, y); ctx.lineTo(p.x + len, y); ctx.stroke();
+      ctx.fillStyle = p.cut ? 'rgba(238,165,189,' + p.life + ')' : '#e6f8f2';
+      ctx.beginPath(); ctx.arc(p.x, y, 2.2, 0, Math.PI * 2); ctx.fill();
+    }
+    // sparks
+    for (var j = sparks.length - 1; j >= 0; j--) {
+      var k = sparks[j];
+      k.x += k.vx * dt; k.y += k.vy * dt; k.life -= dt * 1.8;
+      if (k.life <= 0) { sparks.splice(j, 1); continue; }
+      ctx.fillStyle = 'rgba(241,' + Math.round(176 + 20 * k.life) + ',170,' + k.life + ')';
+      ctx.beginPath(); ctx.arc(k.x, k.y, 1.8, 0, Math.PI * 2); ctx.fill();
+    }
+    // cut flash at CrossTrace
+    if (cutting) {
+      var r = ctx.createRadialGradient(X[1], cy, 0, X[1], cy, 90);
+      r.addColorStop(0, 'rgba(238,165,189,0.28)'); r.addColorStop(1, 'rgba(238,165,189,0)');
+      ctx.fillStyle = r; ctx.fillRect(X[1] - 90, cy - 90, 180, 180);
+    }
+  }
+  var last = 0, acc = 0;
+  function frame(ts) {
+    var dt = last ? Math.min((ts - last) / 1000, 0.05) : 0.016; last = ts; t += dt; acc += dt;
+    if (acc > 0.11) { acc = 0; spawn(); }
+    if (t > nextCut) { cutUntil = t + 1.1; nextCut = t + 3.6; }
+    draw(dt);
+    requestAnimationFrame(frame);
+  }
+  size();
+  window.addEventListener('resize', size);
+  if (reduce) {
+    // one still frame: a few healthy packets and the cut
+    for (var q = 0; q < 14; q++) { spawn(); packets[packets.length - 1].x = xs()[0] + (xs()[2] - xs()[0]) * (q / 14); }
+    cutUntil = 1; draw(0);
+  } else {
+    for (var q2 = 0; q2 < 10; q2++) { spawn(); packets[packets.length - 1].x = xs()[0] + (xs()[2] - xs()[0]) * Math.random(); }
+    requestAnimationFrame(frame);
+  }
+
+  // copy buttons
+  document.querySelectorAll('[data-copy]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var id = b.getAttribute('data-copy'), pre = document.getElementById(id), text = pre.innerText;
+      if (id === 'cli') text = text.split('\n').map(function (l) { return l.replace(/^\$\s*/, '').replace(/\s+#.*$/, ''); }).join('\n');
+      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1600); };
+      var fallback = function () { var r = document.createRange(); r.selectNodeContents(pre); var s = window.getSelection(); s.removeAllRanges(); s.addRange(r); b.textContent = 'Selected'; setTimeout(function () { b.textContent = 'Copy'; }, 1600); };
+      try { navigator.clipboard.writeText(text).then(done, fallback); } catch (e) { fallback(); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
