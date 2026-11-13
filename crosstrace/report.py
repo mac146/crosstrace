@@ -5,7 +5,7 @@ import sys
 import time
 
 from crosstrace import __version__
-from crosstrace.fixes import advice, churn_advice
+from crosstrace.fixes import advice, churn_advice, describe_sdk
 from crosstrace.proxy.faults import TOOL_FAULTS
 from crosstrace.verdict import ORDER, PROBLEM, REVIEW, SETUP
 
@@ -34,7 +34,7 @@ def build(cfg, mode, recordings, stability, results, seconds, seed, not_applicab
     status = "setup_error" if unstable else ("problems" if failing else "ok")
     by_line = {}                                   # one advice line, all the verdicts it answers (no line printed twice)
     for r in failing + review:
-        for line in advice(r.verdict, r.fault.split("!")[0], r.requests):
+        for line in advice(r.verdict, r.fault.split("!")[0], r.requests, cfg.sdk):
             vs = by_line.setdefault(line, [])
             if r.verdict not in vs:
                 vs.append(r.verdict)
@@ -42,7 +42,8 @@ def build(cfg, mode, recordings, stability, results, seconds, seed, not_applicab
     for line, vs in by_line.items():
         fixes.setdefault(", ".join(vs), []).append(line)
     if churn:
-        fixes.setdefault("CHURN", [churn_advice(churn[0].get("requests"))])
+        fixes.setdefault("CHURN", [churn_advice(churn[0].get("requests"), cfg.sdk)])
+    sdk_note = describe_sdk(next((r.requests for r in failing + review if r.requests), None) or (churn[0].get("requests") if churn else None), cfg.sdk)
 
     def trial_json(r, full):
         d = {k: getattr(r, k) for k in ("path", "fault", "at", "verdict", "detail", "attempts", "retry_gaps_s", "exit_code", "seconds")}
@@ -56,7 +57,7 @@ def build(cfg, mode, recordings, stability, results, seconds, seed, not_applicab
 
     return {
         "schema": SCHEMA, "version": __version__, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "status": status,
-        "mode": mode.name, "seed": seed, "seconds": round(seconds, 1),
+        "mode": mode.name, "seed": seed, "sdk_note": sdk_note if fixes else None, "seconds": round(seconds, 1),
         "agent": {"command": cfg.command, "inputs": cfg.inputs},
         "paths": [{"path": i, "command": r.meta.get("command"), "exchanges": len(r.exchanges),
                    "streamed": sum(e.stream for e in r.exchanges), "stable": s["stable"], "problems": s["problems"],
@@ -140,6 +141,8 @@ def render_text(rep):
     out.append("")
     if rep["fixes"]:
         out.append(f"{bold}How to fix{end}")
+        if rep.get("sdk_note"):
+            out.append(f"  {dim}{rep['sdk_note']}{end}")
         for v, lines in rep["fixes"].items():
             out.append(f"  {v}:")
             out += [f"    - {x}" for x in lines]
@@ -176,7 +179,7 @@ def render_markdown(rep):
     if churn:
         out += ["", f"⚠️ **Connection churn:** {churn[0]['connections_per_call']} new connections per model call."]
     if rep["fixes"]:
-        out += ["", "<details><summary>How to fix</summary>", ""]
+        out += ["", "<details><summary>How to fix</summary>", ""] + ([f"_{rep['sdk_note']}_", ""] if rep.get("sdk_note") else [])
         for v, lines in rep["fixes"].items():
             out += [f"**{v}**", ""] + [f"- {x}" for x in lines] + [""]
         out += ["</details>"]

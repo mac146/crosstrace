@@ -223,3 +223,69 @@ def test_pydantic_ai_is_not_mistaken_for_the_javascript_vercel_sdk():
     assert fixes.sdk_family([{"user-agent": "pydantic-ai/2.68.0"}]) == "pydantic-ai"
     assert any("model_settings" in line for line in fixes.advice("HANG", "stream_stall", [{"user-agent": "pydantic-ai/2.68.0"}]))
     assert fixes.sdk_family([{"user-agent": "ai/5.0.1"}]) == "vercel-ai" and fixes.sdk_family([{"user-agent": "ai-sdk/openai/2.0"}]) == "vercel-ai"
+
+
+# ---- which SDK the advice is for: recognised from a table, overridable, and never a wrong guess ---------------------------------------
+
+REAL_USER_AGENTS = {                  # seen on real traffic in this project's own runs
+    "OpenAI/Python 3.50.0": "openai-python", "OpenAI/Python 2.54.0": "openai-python",       # also what CrewAI and LangChain send
+    "Agents/Python 0.24.0": "openai-agents", "pydantic-ai/2.68.0": "pydantic-ai",
+    "Anthropic/Python 2.8.0": "anthropic-python", "OpenAI/JS 7.55.0": "openai-js", "Anthropic/JS 1.8.0": "anthropic-js",
+    "ai/7.0.169": "vercel-ai", "ai-sdk/openai/4.0.114 ai/7.0.169": "vercel-ai",
+}
+
+
+def test_every_user_agent_seen_on_real_traffic_maps_to_its_sdk():
+    from crosstrace import fixes
+    for ua, family in REAL_USER_AGENTS.items():
+        assert fixes.detect_sdk([{"user-agent": ua}])["family"] == family, ua
+
+
+def test_a_user_agent_that_only_contains_the_letters_ai_is_not_the_vercel_sdk():
+    from crosstrace import fixes
+    for ua in ("rails/6.1", "langchain-ai/0.3", "my-ai/1.0", "mail/2.0", "python-httpx/0.28.1", ""):
+        d = fixes.detect_sdk([{"user-agent": ua}])
+        assert d["family"] is None, ua
+
+
+def test_an_unrecognised_sdk_gets_every_option_labelled_not_one_guess():
+    from crosstrace import fixes
+    lines = fixes.advice("HANG", "stream_stall", [{"user-agent": "python-httpx/0.28.1"}])
+    first = lines[0]
+    assert "could not be told" in first and all(k in first for k in ("openai-python:", "pydantic-ai:", "vercel-ai:", "anthropic-js:"))
+    assert "AbortSignal" in first and "model_settings" in first               # each fix is there, under its own label
+    assert fixes.advice("HANG", "stream_stall", [])[0] == first               # no traffic at all: the same honest answer
+    note = fixes.describe_sdk([{"user-agent": "python-httpx/0.28.1"}])
+    assert "not recognised" in note and "python-httpx/0.28.1" in note and "[agent] sdk" in note
+
+
+def test_the_configured_sdk_wins_over_the_user_agent():
+    from crosstrace import fixes
+    reqs = [{"user-agent": "OpenAI/Python 3.50.0"}]                          # CrewAI's user agent is the plain OpenAI one
+    assert fixes.detect_sdk(reqs, "pydantic-ai") == {"family": "pydantic-ai", "user_agent": "OpenAI/Python 3.50.0", "source": "config"}
+    assert "model_settings" in fixes.advice("HANG", "stream_stall", reqs, "pydantic-ai")[0]
+    assert "set in [agent] sdk" in fixes.describe_sdk(reqs, "pydantic-ai")
+    assert "from the user-agent" in fixes.describe_sdk(reqs)
+
+
+def test_config_accepts_a_known_sdk_and_rejects_a_misspelt_one():
+    from crosstrace import config as C
+    base = {"agent": {"command": ["python", "a.py"]}}
+    assert C.parse({"agent": {**base["agent"], "sdk": "openai-agents"}}, ".").sdk == "openai-agents"
+    assert C.parse(base, ".").sdk is None
+    with pytest.raises(C.ConfigError, match="openai-agent"):
+        C.parse({"agent": {**base["agent"], "sdk": "openai-agent"}}, ".")
+
+
+def test_the_report_says_which_sdk_it_wrote_the_advice_for():
+    from crosstrace import report as R
+    from crosstrace.verdict import TrialResult
+    from crosstrace import config as C
+    cfg = C.parse({"agent": {"command": ["python", "a.py"], "inputs": ["x"]}}, ".")
+    mode = cfg.modes["pr"]
+    from crosstrace.proxy.recording import Recording
+    rec = Recording(exchanges=[])
+    r = TrialResult(path=0, fault="stream_stall", at=0, verdict="HANG", requests=[{"provider": "openai", "user-agent": "pydantic-ai/2.68.0"}])
+    rep = R.build(cfg, mode, [rec], [{"stable": True, "problems": []}], [r], 1.0, 0, {})
+    assert rep["sdk_note"].startswith("SDK: pydantic-ai (from the user-agent 'pydantic-ai/2.68.0'")
+    assert "SDK: pydantic-ai" in R.for_terminal(R.render_text(rep)) and "SDK: pydantic-ai" in R.render_markdown(rep)

@@ -34,6 +34,7 @@ command = {command}
 # Each input is recorded as one path through your agent. More inputs = more paths covered.
 inputs = ["Where is order 42 and when will it arrive?"]
 timeout_s = 120            # a healthy run must finish within this
+# sdk = "openai-python"   # the SDK the fix advice is written for; default: read from the User-Agent (wrong or unrecognised? set it here)
 # cwd = "."
 # env = { MY_SETTING = "1" }    # "{proxy_url}" is replaced by the proxy, e.g. MY_BASE_URL = "{proxy_url}/v1"
 
@@ -106,6 +107,7 @@ class Config:
     modes: dict
     fault_params: dict
     mcp: dict = field(default_factory=dict)          # {"writes": [...], "reads": [...]}: tool names that override the write heuristic
+    sdk: str = None                                  # the SDK family the fix advice is written for; None: read from the User-Agent
     continuation: bool = True                        # answer requests that match nothing after a fault, so the run reaches its real end
 
     @property
@@ -128,6 +130,16 @@ def _check_keys(where, d, allowed):
     unknown = set(d) - set(allowed)
     if unknown:
         raise ConfigError(f"{where}: unknown key(s) {', '.join(sorted(unknown))}; allowed: {', '.join(sorted(allowed))}")
+
+
+def _sdk(value):
+    from crosstrace.fixes import TIMEOUT, COMPLETION
+    if value is None:
+        return None
+    known = sorted(set(TIMEOUT) | set(COMPLETION))
+    if value not in known:
+        raise ConfigError(f"[agent] sdk: {value!r} is not one of {', '.join(known)}")
+    return value
 
 
 def _fault_spec(item, where):
@@ -169,7 +181,7 @@ def parse(d, root):
         if not isinstance(mcp.get(key, []), list) or not all(isinstance(x, str) for x in mcp.get(key, [])):
             raise ConfigError(f"[mcp] {key}: a list of tool names")
     agent = d.get("agent") or {}
-    _check_keys("[agent]", agent, {"command", "inputs", "timeout_s", "cwd", "env"})
+    _check_keys("[agent]", agent, {"command", "inputs", "timeout_s", "cwd", "env", "sdk"})
     cmd = agent.get("command")
     if isinstance(cmd, str):
         cmd = shlex.split(cmd)
@@ -221,7 +233,7 @@ def parse(d, root):
                   cwd=os.path.join(root, agent.get("cwd", ".")), env={k: str(v) for k, v in (agent.get("env") or {}).items()},
                   runs=max(1, int(rec.get("runs", 1))), upstreams=dict(upstreams), masks=list(rep.get("masks", [])), allow=allow,
                   trial_timeout_s=test.get("trial_timeout_s"), modes=modes, fault_params=fault_params,
-                  mcp={"writes": list(mcp.get("writes", [])), "reads": list(mcp.get("reads", []))}, continuation=bool(test.get("continue", True)))
+                  mcp={"writes": list(mcp.get("writes", [])), "reads": list(mcp.get("reads", []))}, continuation=bool(test.get("continue", True)), sdk=_sdk(agent.get("sdk")))
 
 
 def template(command):

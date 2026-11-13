@@ -2,24 +2,50 @@
 and only states what the SDKs are known to do (checked in their source or our measurements; see docs/sdk-fault-table.md)."""
 
 
-def sdk_family(requests):
+# What each SDK says about itself in its User-Agent, checked on real traffic or the SDK's source. Order matters: the first match wins, so the
+# specific ones (Agents/Python, pydantic-ai) come before the generic client they are built on.
+USER_AGENTS = [
+    ("anthropic/python", "anthropic-python"), ("anthropic/js", "anthropic-js"),
+    ("agents/python", "openai-agents"),            # the OpenAI Agents SDK sends "Agents/Python <version>"
+    ("pydantic-ai", "pydantic-ai"),               # "pydantic-ai/<version>"; contains "ai/", so it must come before the Vercel entries
+    ("openai/python", "openai-python"), ("openai/js", "openai-js"),
+    ("ai-sdk", "vercel-ai"), ("ai/", "vercel-ai"),
+]
+
+
+def detect_sdk(requests, override=None):
+    """{"family", "user_agent", "source"} for the SDK behind a run. `override` (from `[agent] sdk`) wins; otherwise the first User-Agent in the log
+    that the table recognises; otherwise family None with the User-Agent that was seen, so the advice can say it could not tell."""
+    seen = next((r.get("user-agent") for r in requests or [] if r.get("user-agent")), None)
+    if override:
+        return {"family": override, "user_agent": seen, "source": "config"}
     for r in requests or []:
         ua = (r.get("user-agent") or "").lower()
-        if "anthropic/python" in ua:
-            return "anthropic-python"
-        if "anthropic/js" in ua:
-            return "anthropic-js"
-        if "agents/python" in ua:                     # the OpenAI Agents SDK sends "Agents/Python <version>"
-            return "openai-agents"
-        if "openai/python" in ua:
-            return "openai-python"
-        if "openai/js" in ua:
-            return "openai-js"
-        if "pydantic-ai" in ua:
-            return "pydantic-ai"
-        if "ai-sdk" in ua or ua.startswith("ai/") or " ai/" in ua:
-            return "vercel-ai"
-    return None
+        for needle, family in USER_AGENTS:
+            # "ai/" must be a whole product token ("ai/5.0"), never the end of another name
+            if (needle in ua) if needle != "ai/" else (ua.startswith("ai/") or " ai/" in ua):
+                return {"family": family, "user_agent": r.get("user-agent"), "source": "user-agent"}
+    return {"family": None, "user_agent": seen, "source": "unknown"}
+
+
+def sdk_family(requests, override=None):
+    return detect_sdk(requests, override)["family"]
+
+
+def describe_sdk(requests, override=None):
+    """One line for the report: what was detected and how to correct it."""
+    d = detect_sdk(requests, override)
+    if d["family"] and d["source"] == "config":
+        return f"SDK: {d['family']} (set in [agent] sdk)"
+    if d["family"]:
+        return f"SDK: {d['family']} (from the user-agent {d['user_agent']!r}; wrong? set [agent] sdk = \"...\" in crosstrace.toml)"
+    return (f"SDK: not recognised (user-agent {d['user_agent']!r}), so the advice below lists the options; "
+            f"set [agent] sdk = \"...\" in crosstrace.toml to get the one for yours")
+
+
+def _options(table, intro):
+    """Advice for an SDK that could not be recognised: every known fix, labelled, never one guessed one."""
+    return intro + " " + " | ".join(f"{name}: {text}" for name, text in table.items())
 
 
 TIMEOUT = {
@@ -52,10 +78,12 @@ BODY_ADVICE = {
 GENERIC_COMPLETION ="verify the streamed response completed (a finish/stop reason was received) before using it; retry if not"
 
 
-def advice(verdict, fault, requests=None):
-    sdk = sdk_family(requests)
+def advice(verdict, fault, requests=None, sdk=None):
+    """`sdk`: the family set in `[agent] sdk`, which wins over what the User-Agent says."""
+    sdk = sdk_family(requests, sdk)
     if verdict == "HANG":
-        return [TIMEOUT.get(sdk, "set a read (inactivity) timeout on model calls; SDK defaults are many minutes"),
+        return [TIMEOUT[sdk] if sdk in TIMEOUT else _options(TIMEOUT, "set a read (inactivity) timeout on model calls (SDK defaults are many "
+                                                            "minutes); which SDK this is could not be told, so by SDK:"),
                 "make sure a timed-out call is retried or surfaced, not awaited forever",
                 "if your agent already uses a long timeout on purpose, raise `[test] trial_timeout_s` above timeout x attempts"] + (
             ["the SDK waits for whatever Retry-After says; cap it, or fail fast and let your scheduler retry"]
@@ -64,7 +92,7 @@ def advice(verdict, fault, requests=None):
         if fault in BODY_ADVICE:
             return BODY_ADVICE[fault]
         if fault in ("stream_cut_clean", "tool_args_cut", "idle_kill"):
-            out = [COMPLETION.get(sdk, GENERIC_COMPLETION)]
+            out = [COMPLETION[sdk] if sdk in COMPLETION else GENERIC_COMPLETION]
             if fault == "tool_args_cut":
                 out.append("never execute a tool call from a stream that did not complete; validate tool arguments against the schema "
                            "(required fields) before running the tool")
@@ -102,8 +130,8 @@ def advice(verdict, fault, requests=None):
     return []
 
 
-def churn_advice(requests):
-    sdk = sdk_family(requests)
+def churn_advice(requests, sdk=None):
+    sdk = sdk_family(requests, sdk)
     if sdk == "openai-python":
         return "openai-python sync streaming opens a new connection per call (Stage 21; openai-python #4040): use AsyncOpenAI on "\
                "v3.30+ or HTTP/2"

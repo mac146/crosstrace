@@ -107,10 +107,15 @@ masked by default. An unstable recording is a setup error (exit 3), never a pass
 
 ## Configuration (`crosstrace.toml`)
 
-`crosstrace init` writes a commented file. Keys: `[agent] command, inputs, timeout_s, cwd, env`; `[record] runs, upstreams`;
+`crosstrace init` writes a commented file. Keys: `[agent] command, inputs, timeout_s, cwd, env, sdk`; `[record] runs, upstreams`;
 `[replay] masks`; `[test] allow, trial_timeout_s`; `[modes.<name>] faults, max_exchanges, stability_runs, jobs`;
 `[faults.<fault>] <parameters>`. Unknown keys are errors. Faults are names (`"server_error"`, heals after one failed attempt) or
 `"server_error!persistent"` (never heals), or `{ name = "overloaded", heal = 2, params = { ... } }`. `crosstrace faults` lists them.
+
+`[agent] sdk` names the SDK the fix advice is written for (`openai-python`, `openai-agents`, `pydantic-ai`, `anthropic-python`, `openai-js`,
+`anthropic-js`, `vercel-ai`). By default it is read from the User-Agent the proxy logged, and the report says what it detected. A framework built on
+an SDK sends that SDK's User-Agent (CrewAI and LangChain send `OpenAI/Python`); an unrecognised one gets every fix listed under its SDK's name,
+never one guessed fix.
 
 `[record] upstreams` points recording at an OpenAI-compatible gateway instead of the provider (e.g. a LiteLLM proxy or vLLM).
 
