@@ -411,7 +411,8 @@ def _apply_outcome(res, requests, exit_code, stdout, hang, healthy_stdout):
     if not cont and not unbounded:
         return res                                 # never continued: it ended first, or continuation was off
     n = len(cont)
-    res.observed.update(continued=n, unbounded=unbounded)
+    live = any(r.get("live") for r in cont)
+    res.observed.update(continued=n, unbounded=unbounded, live=live)
     if unbounded or hang:
         res.verdict = "RETRY_STORM"
         res.detail = (f"after the failure it kept sending different requests ({n} answered, then it was cut off) and never stopped: "
@@ -421,7 +422,7 @@ def _apply_outcome(res, requests, exit_code, stdout, hang, healthy_stdout):
     if any(r.get("how") == "miss" for r in after_first):
         res.detail += "; the replay could not answer a later request of its, so how it ends is unknown"
         return res
-    outcome = f"{n} more request{'s' if n != 1 else ''}"
+    outcome = f"{n} more request{'s' if n != 1 else ''}" + (" answered by the real model" if live else "")
     if exit_code != 0:
         res.verdict = "SURFACED"
         res.detail = f"changed course after the failure and then stopped with an error (exit {exit_code}) after {outcome}: {_shorten(res.detail)}"

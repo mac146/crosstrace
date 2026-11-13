@@ -32,7 +32,8 @@ def _error_body(kind, message):
 
 class ModelProxy:
     def __init__(self, mode="replay", recording=None, upstreams=None, masks=None, mask_defaults=True, faults=None,
-                 host="127.0.0.1", port=0, speed=0.0, upstream_timeout=600.0, continuation=False, continuation_cap=8):
+                 host="127.0.0.1", port=0, speed=0.0, upstream_timeout=600.0, continuation=False, continuation_cap=8,
+                 live_keys=None):
         if mode not in ("record", "replay", "live"):
             raise ValueError(f"mode must be record, replay or live, not {mode!r}")
         if mode == "replay" and recording is None:
@@ -50,6 +51,9 @@ class ModelProxy:
         # its request) is answered with the next healthy reply of the plan instead of a 502, so the run reaches its real end and the
         # verdict can come from the outcome. After `continuation_cap` such answers the agent is not stopping: it is flagged and cut off.
         self.continuation, self.continuation_cap = continuation, continuation_cap
+        # Live continuation (opt-in): such a request goes to the REAL provider with the user's own key instead of getting the recorded reply, so an
+        # agent's re-prompt is answered by a real model. {provider: api key}; the key is only put on the outgoing request, never logged or stored.
+        self.live_keys = {k: v for k, v in (live_keys or {}).items() if v}
         self._cont_ptr, self._cont_count = None, 0
         self.connections = []                 # one dict per hop-1 connection
         self.requests = []                    # one dict per request (the log the verdict engine reads)
@@ -67,7 +71,7 @@ class ModelProxy:
     async def start(self):
         self._server = await asyncio.start_server(self._handle, self.host, self.port)
         self.port = self._server.sockets[0].getsockname()[1]
-        if self.mode != "replay":
+        if self.mode != "replay" or self.live_keys:
             t = self.upstream_timeout
             self._client = httpx.AsyncClient(timeout=httpx.Timeout(t, connect=min(t, 15.0)), http2=False, trust_env=False)
         return self
@@ -145,7 +149,10 @@ class ModelProxy:
             entry.update(how=how, idx=ex.idx if ex else None)
             if ex is None:
                 entry["request"] = norm            # kept only for misses: shows the user which field differs from the recording
-                cont = self._continuation(body, entry) if self.continuation else None
+                if self.continuation and self.live_keys.get(provider) and self._gate(entry) is not None:
+                    entry.update(how="continued", live=True)
+                    return await self._forward(req, rw, entry, provider, None, live_key=self.live_keys[provider])
+                cont = self._continuation(body, entry) if self.continuation and not self.live_keys.get(provider) else None
                 if cont is not None:
                     ex, fault = cont
                     entry.update(how="continued", served_idx=ex.idx)
@@ -175,13 +182,8 @@ class ModelProxy:
                               status=0, headers=[], stream=bool(body.get("stream")))
         return await self._forward(req, rw, entry, provider, record)
 
-    def _continuation(self, body, entry):
-        """(exchange, fault or None) to answer a request that matched nothing, or None for the plain 502.
-
-        Only after a fault has been injected: before that a miss means the replay is unstable. The answer is the next recorded reply of the
-        plan, starting with the reply to the failed call (a re-prompt is usually the agent asking for that step again), of the same provider
-        and the same kind (streamed or not) as the request. A persistent fault keeps hitting these answers, which is how the agent's own
-        recovery is tested for a bound."""
+    def _gate(self, entry):
+        """The fault plan when this unmatched request may be continued, else None. Counts it; past the cap the agent is flagged as not stopping."""
         plan = self.faults
         if plan is None or not plan.injected:
             return None
@@ -191,6 +193,18 @@ class ModelProxy:
         entry["continued_n"] = self._cont_count
         if self._cont_count > self.continuation_cap:
             entry["unbounded"] = True
+            return None
+        return plan
+
+    def _continuation(self, body, entry):
+        """(exchange, fault or None) to answer a request that matched nothing, or None for the plain 502.
+
+        Only after a fault has been injected: before that a miss means the replay is unstable. The answer is the next recorded reply of the
+        plan, starting with the reply to the failed call (a re-prompt is usually the agent asking for that step again), of the same provider
+        and the same kind (streamed or not) as the request. A persistent fault keeps hitting these answers, which is how the agent's own
+        recovery is tested for a bound."""
+        plan = self._gate(entry)
+        if plan is None:
             return None
         want_stream, exchanges = bool(body.get("stream")), self.recording.exchanges
         fits = [j for j, e in enumerate(exchanges) if e.stream == want_stream and e.provider == entry.get("provider")]
@@ -213,9 +227,12 @@ class ModelProxy:
             await rw.chunk(text.encode() + b"\n\n")
         await rw.end_chunked()
 
-    async def _forward(self, req, rw, entry, provider, record):
+    async def _forward(self, req, rw, entry, provider, record, live_key=None):
         url = self.upstreams[provider].rstrip("/") + req.target
-        headers = [(k, v) for k, v in req.headers if k.lower() not in SKIP_UPSTREAM_REQUEST] + [("Accept-Encoding", "identity")]
+        skip = SKIP_UPSTREAM_REQUEST | ({"authorization", "x-api-key"} if live_key else set())      # the agent's replay key is a placeholder
+        headers = [(k, v) for k, v in req.headers if k.lower() not in skip] + [("Accept-Encoding", "identity")]
+        if live_key:
+            headers.append(("x-api-key", live_key) if provider == "anthropic" else ("Authorization", f"Bearer {live_key}"))
         t0 = time.monotonic()
         try:
             async with self._client.stream(req.method, url, headers=headers, content=req.body) as up:

@@ -149,3 +149,116 @@ def test_outcome_rules_on_synthetic_logs(upstream):
     assert r.verdict in REVIEW and "could not answer a later request" in r.detail
     # still running when the time ran out after being continued: it did not stop
     assert run([], exit_code=-9, hang=True).verdict in ("HANG", "RETRY_STORM")
+
+
+# ---- live continuation: the real provider answers the agent's re-prompt -------------------------------------------------------------
+
+import http.server  # noqa: E402
+import json  # noqa: E402
+import threading  # noqa: E402
+
+import httpx  # noqa: E402
+
+from crosstrace.proxy import ProxyThread  # noqa: E402
+
+REAL_KEY = "sk-REAL-test-key-do-not-leak"
+
+
+@pytest.fixture()
+def capture_upstream():
+    """A stand-in for the real provider that keeps every request it receives (headers and body)."""
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            seen.append({"headers": {k.lower(): v for k, v in self.headers.items()}, "path": self.path, "body": json.loads(body or b"{}")})
+            out = json.dumps({"id": "x", "object": "chat.completion", "choices": [{"index": 0, "finish_reason": "stop",
+                                                                                      "message": {"role": "assistant", "content": "a real answer"}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}", seen
+    srv.shutdown()
+    srv.server_close()
+
+
+def post(p, body, key="sk-crosstrace-replay", path="/v1/chat/completions", header="Authorization"):
+    return httpx.post(p.base_url + path, json=body, headers={header: f"Bearer {key}" if header == "Authorization" else key}, timeout=20)
+
+
+def live_proxy(upstream, recording, url, cap=3, keys=None, heal_after=1):
+    plan = FaultPlan(make_fault("stream_cut_clean"), at=0, heal_after=heal_after)
+    plan.select({}, recording.exchanges[0])                                      # the fault has been injected
+    return ProxyThread(mode="replay", recording=recording, faults=plan, continuation=True, continuation_cap=cap,
+                       upstreams={"openai": url, "anthropic": url}, live_keys=keys if keys is not None else {"openai": REAL_KEY})
+
+
+def test_live_sends_the_real_key_upstream_and_never_the_placeholder(upstream, capture_upstream):
+    url, seen = capture_upstream
+    with live_proxy(upstream, rec("good", upstream), url) as p:
+        r = post(p, {"model": "m", "messages": [{"role": "user", "content": "a request that matches nothing recorded"}]})
+        log = list(p.requests)
+    assert r.status_code == 200 and r.json()["choices"][0]["message"]["content"] == "a real answer"
+    assert seen[0]["headers"]["authorization"] == f"Bearer {REAL_KEY}"               # the real key went out ...
+    assert "sk-crosstrace-replay" not in json.dumps(seen[0]["headers"])               # ... and the replay placeholder did not
+    assert log[-1]["how"] == "continued" and log[-1]["live"] is True and log[-1]["status"] == 200
+    assert REAL_KEY not in json.dumps([{k: v for k, v in e.items()} for e in log])    # the key is not in the log the report is built from
+
+
+def test_live_never_calls_out_before_a_fault_or_for_a_request_that_matches_the_recording(upstream, capture_upstream):
+    url, seen = capture_upstream
+    recording = rec("good", upstream)
+    plan = FaultPlan(make_fault("stream_cut_clean"), at=0)                            # no fault injected yet
+    with ProxyThread(mode="replay", recording=recording, faults=plan, continuation=True, upstreams={"openai": url},
+                     live_keys={"openai": REAL_KEY}) as p:
+        r = post(p, {"model": "m", "messages": [{"role": "user", "content": "unrelated"}]})
+    assert r.status_code == 502 and seen == []                                        # a miss before any fault is still an instability, not a live call
+
+
+def test_live_stops_at_the_cap_and_flags_the_agent(upstream, capture_upstream):
+    url, seen = capture_upstream
+    with live_proxy(upstream, rec("good", upstream), url, cap=2) as p:
+        codes = [post(p, {"model": "m", "messages": [{"role": "user", "content": f"try {i}"}]}).status_code for i in range(4)]
+        log = list(p.requests)
+    assert codes == [200, 200, 502, 502] and len(seen) == 2                           # no third call reaches the provider: the spend is bounded
+    assert [e.get("unbounded", False) for e in log[-4:]] == [False, False, True, True]
+
+
+def test_live_uses_the_right_header_for_anthropic(upstream, capture_upstream):
+    url, seen = capture_upstream
+    with live_proxy(upstream, rec("good", upstream), url, keys={"anthropic": "sk-ant-REAL"}) as p:
+        post(p, {"model": "m", "max_tokens": 5, "messages": [{"role": "user", "content": "x"}]}, key="sk-ant-replay", path="/v1/messages",
+             header="x-api-key")
+    assert seen[0]["headers"]["x-api-key"] == "sk-ant-REAL" and "authorization" not in seen[0]["headers"]
+
+
+def test_a_provider_without_a_key_falls_back_to_the_recorded_answer(upstream, capture_upstream):
+    url, seen = capture_upstream
+    with live_proxy(upstream, rec("good", upstream), url, keys={"anthropic": "sk-ant-REAL"}) as p:      # only anthropic is live; the agent calls openai
+        r = post(p, {"model": "m", "stream": True, "messages": [{"role": "user", "content": "x"}]})
+        log = list(p.requests)
+    assert r.status_code == 200 and seen == [] and log[-1]["how"] == "continued" and not log[-1].get("live")
+
+
+def test_live_end_to_end_a_rewriting_agent_is_answered_by_the_provider_and_the_verdict_says_so(upstream):
+    """The rewrite demo agent changes course after a cut stream; here its new request goes to a 'real' provider (the mock) with a key."""
+    r = runner.trial(spec("rewrite", upstream), rec("rewrite", upstream), "stream_cut_clean", 0, timeout_s=30.0,
+                     live_keys={"openai": "sk-live-test"}, live_max_calls=4)
+    assert r.verdict in ("RECOVERED", "RECOVERED_DIFFERENT") and r.observed["live"] is True
+    assert "answered by the real model" in r.detail and r.exit_code == 0
+
+
+def test_live_end_to_end_an_endless_reprompter_is_cut_off_at_the_cap(upstream):
+    r = runner.trial(spec("reprompt_forever", upstream), rec("reprompt_forever", upstream), "stream_cut_clean", 0, heal_after=None,
+                     timeout_s=30.0, live_keys={"openai": "sk-live-test"}, live_max_calls=3)
+    # with a real provider the cut is no longer injected on its answers (it is a real answer), so an endless re-prompter ends when the answer completes
+    assert r.observed["live"] is True and r.observed["continued"] <= 3

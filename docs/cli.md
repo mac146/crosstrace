@@ -77,6 +77,11 @@ would answer with an error, the agent would die, and the verdict would have to b
 - **What it cannot show.** A real model might answer a re-prompt badly or well; CrossTrace answers with the healthy reply. It shows that the
   agent stops and how, not that its re-prompt works. Without a fitting recorded reply (another provider, or streamed versus not) it falls back to
   an error, and the result stays a review.
+- **Live: ask a real model.** `crosstrace test --live --fault context_length --path 0 --at 0` sends those requests to the real provider
+  (the URL from `[record] upstreams`, else the provider's own) with the key in `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, so the agent's re-prompt
+  gets a real answer. The agent never sees the key (it keeps its replay placeholder; the proxy swaps it on the outgoing request), the key is not
+  written to the log or the report, and a trial makes at most `--live-max-calls` (default 6) real calls before the agent is judged as not
+  stopping. A fault is not injected on a real answer. It spends money, so it is opt-in. A provider with no key set still gets the recorded reply.
 - **Off:** `crosstrace test --no-continue` or `[test] continue = false`.
 
 ## Coverage, and why one run is not enough

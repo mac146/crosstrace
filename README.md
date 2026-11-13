@@ -143,7 +143,10 @@ model, summarises, rewrites its request), CrossTrace answers it with the next he
 run reaches its real end and the verdict comes from how it ended. A persistent fault (`"length_cut!persistent"`) keeps hitting the agent's
 recovery attempts too, which tests whether its recovery has a bound: an agent that keeps asking after 8 different requests is a `RETRY_STORM`.
 No model and no key are needed, so it stays deterministic and offline. It cannot tell whether a re-prompted agent would have received a good
-answer from a real model; it only shows that the agent stops. Turn it off with `--no-continue` or `[test] continue = false`.
+answer from a real model; it only shows that the agent stops. To check that too, add `--live`: those requests then go to the real provider
+with your own key (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, read from the environment, never stored or logged), at most 6 calls per trial
+(`--live-max-calls`), so a re-prompt is answered by a real model and the run ends on its merits. It spends money, so it is opt-in and meant for a
+handful of trials (`--fault`, `--path`, `--at`), not a whole run. Turn continuation off with `--no-continue` or `[test] continue = false`.
 
 No LLM judge and no comparison of free-text answers: the verdict comes from which model call the agent made next, so it is the same
 every time. Faults are injected at every model call of every recorded path (nightly) or a fixed sample (pull requests), so an agent can't

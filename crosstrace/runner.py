@@ -220,7 +220,7 @@ def stability(spec, recording, runs=2):
             "requests": [{k: r.get(k) for k in ("user-agent",)} for r in ua[:1]]}
 
 
-def trial(spec, recording, fault, at, heal_after=1, path=0, timeout_s=None, continuation=True, **params):
+def trial(spec, recording, fault, at, heal_after=1, path=0, timeout_s=None, continuation=True, live_keys=None, live_max_calls=6, **params):
     """One fault at one exchange; returns a TrialResult with the verdict."""
     f = make_fault(fault, **params) if isinstance(fault, str) else fault
     plan = FaultPlan(f, at=at, heal_after=heal_after)
@@ -228,7 +228,8 @@ def trial(spec, recording, fault, at, heal_after=1, path=0, timeout_s=None, cont
         return TrialResult(path=path, fault=f.name, at=at, verdict="N/A", detail=f"{f.name} does not apply to exchange {at}")
     calls = _mcp_calls(recording)
     healthy = recording.meta.get("stdout", "")
-    with ProxyThread(mode="replay", recording=recording, faults=plan, masks=spec.masks, continuation=continuation) as p, \
+    live = {"live_keys": live_keys, "upstreams": spec.upstreams, "continuation_cap": live_max_calls} if live_keys else {}
+    with ProxyThread(mode="replay", recording=recording, faults=plan, masks=spec.masks, continuation=continuation, **live) as p, \
             McpRun(spec, "replay", calls) as m:
         def watch():
             # With MCP tool calls the run must finish: stopping at the first sign of SILENT could cut off the writes that come after it
@@ -303,7 +304,7 @@ def plan_trials(recordings, faults, max_exchanges=0, seed=0, only_path=None, onl
     return out
 
 
-def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None, continuation=True):
+def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None, continuation=True, live_keys=None, live_max_calls=6):
     """Run planned trials, `jobs` at a time (each trial has its own proxy and agent process). Results in plan order."""
     from concurrent.futures import ThreadPoolExecutor
 
@@ -313,7 +314,8 @@ def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None,
         if f.tool_fault:
             r = tool_trial(spec_for(pi), recordings[pi], f, k, path=pi, timeout_s=timeout_s)
         else:
-            r = trial(spec_for(pi), recordings[pi], f, k, heal_after=fs.heal, path=pi, timeout_s=timeout_s, continuation=continuation)
+            r = trial(spec_for(pi), recordings[pi], f, k, heal_after=fs.heal, path=pi, timeout_s=timeout_s, continuation=continuation,
+                      live_keys=live_keys, live_max_calls=live_max_calls)
         r.fault = fs.label
         if progress:
             progress(r)

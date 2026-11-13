@@ -175,8 +175,19 @@ def cmd_test(a):
         if r.verdict in PROBLEM:
             log(f"  [{done[0]}/{len(planned)}] {r.fault} at path {r.path} exchange {r.at}: {r.verdict}")
 
+    live_keys = None
+    if a.live:
+        live_keys = {k: os.environ.get(v) for k, v in (("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY")) if os.environ.get(v)}
+        if not live_keys:
+            err("--live needs your real key in OPENAI_API_KEY or ANTHROPIC_API_KEY (the proxy sends it to the provider; the agent never sees it)")
+            return EXIT_USAGE
+        if not (cfg.continuation and not a.no_continue):
+            err("--live needs continuation (do not combine it with --no-continue or [test] continue = false)")
+            return EXIT_USAGE
+        log(f"live continuation: a request that matches nothing recorded goes to the real {'/'.join(sorted(live_keys))} API with your key "
+            f"(at most {a.live_max_calls} calls per trial); this spends money")
     results = runner.run_planned(lambda pi: spec_for(cfg, replay_command(cfg, recs[pi]), timeout_s), recs, planned, timeout_s, jobs, progress,
-                                 continuation=cfg.continuation and not a.no_continue)
+                                 continuation=cfg.continuation and not a.no_continue, live_keys=live_keys, live_max_calls=a.live_max_calls)
     rep = R.build(cfg, mode, recs, stab, results, time.monotonic() - t0, a.seed, not_applicable)
     print(R.for_terminal(R.render_text(rep)))
     if not a.no_save:
@@ -245,6 +256,9 @@ def build_parser():
     p.add_argument("--json", help="also write the JSON report here")
     p.add_argument("--md", help="append the Markdown report here (e.g. $GITHUB_STEP_SUMMARY)")
     p.add_argument("--no-continue", action="store_true", help="do not answer requests that match nothing recorded after a fault (a 502 instead)")
+    p.add_argument("--live", action="store_true", help="send requests that match nothing recorded after a fault to the REAL provider with the key in "
+                   "OPENAI_API_KEY / ANTHROPIC_API_KEY, so an agent's re-prompt is answered by a real model (spends money)")
+    p.add_argument("--live-max-calls", type=int, default=6, help="real calls allowed per trial before the agent is judged as not stopping (default 6)")
     p.add_argument("--no-save", action="store_true", help="do not write .crosstrace/reports/")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(fn=cmd_test)
