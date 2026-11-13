@@ -9,7 +9,9 @@ from collections import Counter
 
 WRITE_WORDS = {"create", "send", "submit", "pay", "charge", "refund", "delete", "remove", "update", "post", "write", "insert", "book",
                "order", "transfer", "cancel", "publish", "upload", "click", "fill", "type", "set", "add", "save", "approve", "reject",
-               "execute", "commit", "push", "merge", "invite", "assign", "move", "rename", "patch", "put", "reply", "email", "purchase"}
+               "execute", "commit", "push", "merge", "invite", "assign", "move", "rename", "patch", "put", "reply", "email", "purchase",
+               # browser tools: a key press can submit a form, a script can do anything, a drag or drop can trigger an action
+               "press", "evaluate", "drag", "drop", "unsafe"}
 READ_WORDS = {"get", "list", "read", "search", "find", "lookup", "fetch", "status", "check", "view", "describe", "query", "show", "count",
               "info", "details", "history", "snapshot", "screenshot", "inspect", "preview", "validate", "verify"}
 

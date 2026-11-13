@@ -46,9 +46,29 @@ def read_ledger(path):
     ("refund", True), ("send_email", True), ("submit_form", True), ("browser_click", True), ("createInvoice", True), ("delete-file", True),
     ("refund_status", False), ("get_order", False), ("list_files", False), ("searchDocs", False), ("check_status", False),
     ("browser_snapshot", False), ("frobnicate", False), ("", False),
+    # found on the real Playwright MCP server: a key press (Enter) submits a form and a script can do anything
+    ("browser_press_key", True), ("browser_evaluate", True), ("browser_run_code_unsafe", True), ("browser_drag", True), ("browser_drop", True),
 ])
 def test_write_heuristic(name, write):
     assert is_write(name) is write
+
+
+PLAYWRIGHT_TOOLS = {                     # the 25 tools of @playwright/mcp 0.0.85, and what a person would say each one is
+    "write": ["browser_click", "browser_type", "browser_fill_form", "browser_file_upload", "browser_press_key", "browser_evaluate",
+              "browser_run_code_unsafe", "browser_drag", "browser_drop"],
+    "read": ["browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_take_screenshot", "browser_console_messages",
+             "browser_network_requests", "browser_network_request", "browser_find", "browser_hover", "browser_tabs", "browser_wait_for",
+             "browser_resize", "browser_close", "browser_emulate_media"],
+    # genuinely ambiguous, so they are a config choice: [mcp] writes = ["browser_select_option", "browser_handle_dialog"]
+    "ambiguous": ["browser_select_option", "browser_handle_dialog"],
+}
+
+
+def test_the_real_browser_server_tool_names_are_classified_as_documented():
+    assert all(is_write(n) for n in PLAYWRIGHT_TOOLS["write"])
+    assert not any(is_write(n) for n in PLAYWRIGHT_TOOLS["read"])
+    assert not any(is_write(n) for n in PLAYWRIGHT_TOOLS["ambiguous"])                   # reads by default; the config lists fix it
+    assert all(is_write(n, writes=PLAYWRIGHT_TOOLS["ambiguous"]) for n in PLAYWRIGHT_TOOLS["ambiguous"])
 
 
 def test_config_lists_override_the_heuristic():

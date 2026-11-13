@@ -148,7 +148,9 @@ CrossTrace tests this for MCP servers that run over stdio. One change in your ag
   **`DUPLICATE`**, in **every** trial, not only this one. A run that recovers and prints the right answer can still have written twice, so
   recovering is not enough to pass. The same check catches an agent that recovers from a *model* failure by starting the task over.
 - **Which tools are writes:** guessed from the name (`send`, `submit`, `pay`, `delete`, `click`, ...; `get`, `list`, `status` are reads).
-  List the ones it gets wrong in `[mcp] writes` / `reads`. A browser tool that clicks is a write by default.
+  List the ones it gets wrong in `[mcp] writes` / `reads`. For browser tools, click, type, fill_form, file_upload, press_key (Enter submits a
+  form), evaluate and run_code are writes; navigate, snapshot and screenshot are reads. `select_option` and `handle_dialog` are ambiguous and
+  count as reads: list them under `writes` if a choice or a confirmation can change something.
 
 ```
 ✗ lost_response   DUPLICATE 1/1
@@ -156,7 +158,10 @@ CrossTrace tests this for MCP servers that run over stdio. One change in your ag
                   the agent recovered and finished, but the write was repeated
 ```
 
-Runnable without any key: [examples/mcp_agents](examples/mcp_agents) (`pip install mcp openai`). **What this does not do yet:**
+Runnable without any key: [examples/mcp_agents](examples/mcp_agents) (`pip install mcp openai`). Also checked by hand against the official
+`@playwright/mcp` 0.0.85 (25 tools): a scripted agent, a real Chrome and a local order form. Recording placed one real order; replays and
+trials placed none. Losing the response to the click made the retrying agent **DUPLICATE** and the checking agent stop. That agent was
+scripted, so it tests the tool-call handling, not how well a model drives a browser. **What this does not do yet:**
 
 - Only stdio MCP servers, and one wrapped server per agent. Servers over streamable HTTP are not covered.
 - Your MCP client must start the wrapper with `CROSSTRACE_MCP` in its environment. The official Python SDK starts servers with a reduced
@@ -164,6 +169,8 @@ Runnable without any key: [examples/mcp_agents](examples/mcp_agents) (`pip insta
 - Replay cannot answer a state check. An agent that asks a read tool "did it go through?" before retrying gets the recorded answer, or
   "not recorded", so it shows as stopping with an error, not as recovering safely.
 - A retry with the same arguments counts as a repeat even if the server would have ignored it (an idempotency key it remembers).
+- The repeat is counted in replay, from a log of the tool calls. CrossTrace does not run a second real click to show the site receiving two
+  orders; it counts the second call the agent made.
 - The lost response is a transport error on a live session, not a dead server process.
 
 ## Background
