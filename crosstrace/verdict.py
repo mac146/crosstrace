@@ -14,7 +14,7 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 
-from crosstrace.proxy.faults import NON_RETRYABLE, parse_event
+from crosstrace.proxy.faults import NON_RETRYABLE, json_body, text_slot, parse_event
 
 OK = {"RECOVERED", "SURFACED"}
 REVIEW = {"RECOVERED_DIFFERENT", "ENDED_EARLY"}
@@ -46,6 +46,13 @@ class TrialResult:
 
     def to_dict(self):
         return asdict(self)
+
+
+def body_answer_text(ex):
+    """The answer text of a non-streamed exchange ('' when it has none)."""
+    obj = json_body(ex)
+    slot = text_slot(obj) if obj else None
+    return slot[0][slot[1]] if slot else ""
 
 
 def delivered_text(ex, n):
@@ -162,9 +169,13 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
         if exit_code != 0:
             res.verdict, res.detail = "SURFACED", f"exited {exit_code} ({tries})"
             return res
-        n = (first.get("fault_detail") or {}).get("events_sent")
+        detail = first.get("fault_detail") or {}
+        n = detail.get("events_sent")
         part = delivered_text(ex, n).strip() if (ex.stream and n) else ""
         full = delivered_text(ex, len(ex.events)).strip() if ex.stream else ""
+        if not ex.stream and first.get("fault") == "length_cut" and detail.get("chars_sent"):
+            full = body_answer_text(ex).strip()                 # a cut non-streamed answer: the first chars_sent characters were delivered
+            part = full[:detail["chars_sent"]].strip()
         if part and part in stdout and (not full or full not in stdout):
             res.verdict, res.detail = "PARTIAL", f"printed the cut answer ({len(part)} of {len(full)} chars) and exited 0"
         elif not stdout.strip() and (healthy_stdout or "").strip():

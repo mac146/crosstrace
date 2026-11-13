@@ -352,7 +352,110 @@ class StreamErrorEvent(Fault):
         return True
 
 
+# ---- "200 OK but unusable": faults for responses that are not streamed ----------------------------------------------------
+
+
+def json_body(ex):
+    try:
+        obj = json.loads(ex.body or "")
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def text_slot(obj):
+    """(container, key) that holds the first plain-text answer of a non-streamed response, or None. Covers OpenAI chat completions,
+    OpenAI Responses and Anthropic Messages."""
+    if isinstance(obj.get("choices"), list) and obj["choices"] and isinstance(obj["choices"][0], dict):
+        message = obj["choices"][0].get("message") or {}
+        if isinstance(message.get("content"), str) and message["content"]:
+            return message, "content"
+    for item in obj.get("output") or []:
+        if isinstance(item, dict) and item.get("type") == "message":
+            for part in item.get("content") or []:
+                if isinstance(part, dict) and part.get("type") == "output_text" and part.get("text"):
+                    return part, "text"
+    if obj.get("type") == "message":
+        for block in obj.get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                return block, "text"
+    return None
+
+
+def _mark_hit_length_limit(obj):
+    if isinstance(obj.get("choices"), list):
+        obj["choices"][0]["finish_reason"] = "length"
+    elif obj.get("object") == "response":
+        obj["status"] = "incomplete"
+        obj["incomplete_details"] = {"reason": "max_output_tokens"}
+    else:
+        obj["stop_reason"] = "max_tokens"
+
+
+def _dump(obj):
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode()
+
+
+class _NeedsAnswerText(Fault):
+    """Base for faults that rewrite the answer text of a non-streamed response."""
+
+    def applies(self, ex):
+        if ex.stream:
+            return False
+        obj = json_body(ex)
+        return obj is not None and text_slot(obj) is not None
+
+
+class LengthCut(_NeedsAnswerText):
+    """A valid reply that stopped at the output-token limit: HTTP 200, the text cut short, and the provider's own signal for it
+    (finish_reason "length", Anthropic stop_reason "max_tokens", Responses status "incomplete"). A caller that never reads the stop
+    reason treats half an answer as the whole answer."""
+    name, defaults = "length_cut", {"cut": 0.5}
+
+    async def serve(self, rw, ex, entry):
+        obj = json_body(ex)
+        box, key = text_slot(obj)
+        full = box[key]
+        box[key] = full[:max(1, round(len(full) * self.p["cut"]))]
+        _mark_hit_length_limit(obj)
+        entry.update(status=ex.status, fault_detail={"chars_sent": len(box[key]), "chars_total": len(full)})
+        await rw.send_full(ex.status, ex.headers, _dump(obj))
+        return True
+
+
+class EmptyContent(_NeedsAnswerText):
+    """HTTP 200 and a valid body whose answer is empty, with a normal finish reason. Providers do this on content filters, on some
+    overloads and on reasoning models that spend their whole budget thinking."""
+    name = "empty_content"
+
+    async def serve(self, rw, ex, entry):
+        obj = json_body(ex)
+        box, key = text_slot(obj)
+        entry.update(status=ex.status, fault_detail={"chars_total": len(box[key])})
+        box[key] = ""
+        await rw.send_full(ex.status, ex.headers, _dump(obj))
+        return True
+
+
+class MalformedBody(Fault):
+    """HTTP 200 with a correct Content-Length, but the body is JSON cut off part way: what a gateway or proxy sends when its upstream
+    dies while it is writing the reply. The HTTP layer sees a complete response; only the parser notices."""
+    name, defaults = "malformed_body", {"cut": 0.5}
+
+    def applies(self, ex):
+        return not ex.stream and bool(ex.body)
+
+    async def serve(self, rw, ex, entry):
+        n = max(1, round(len(ex.body) * self.p["cut"]))
+        entry.update(status=ex.status, fault_detail={"chars_sent": n, "chars_total": len(ex.body)})
+        await rw.send_full(ex.status, ex.headers, ex.body[:n].encode())
+        return True
+
+
 CATALOG = {
+    "length_cut": lambda **p: LengthCut(**p),
+    "empty_content": lambda **p: EmptyContent(**p),
+    "malformed_body": lambda **p: MalformedBody(**p),
     "stream_cut_clean": lambda **p: StreamCutClean(**p),
     "tool_args_cut": lambda **p: ToolArgsCut(**p),
     "stream_cut_fin": lambda **p: StreamCutAbort("stream_cut_fin", "fin", **p),

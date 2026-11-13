@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from crosstrace.proxy import FaultPlan, ProxyThread, make_fault
-from crosstrace.proxy.faults import body_end, is_terminal, is_tool_arg, parse_event
+from crosstrace.proxy.faults import text_slot, body_end, is_terminal, is_tool_arg, parse_event
 from mockservices.sse_server import serve_in_thread
 
 TOOLS_OA = [{"type": "function", "function": {"name": "refund", "parameters": {"type": "object", "properties": {}}}}]
@@ -22,6 +22,7 @@ REQ = {
                                         "messages": [{"role": "user", "content": "refund"}]}),
     "openai_plain": ("/v1/chat/completions", {"model": "m", "messages": [{"role": "user", "content": "not streamed"}]}),
     "anthropic_plain": ("/v1/messages", {"model": "m", "max_tokens": 50, "messages": [{"role": "user", "content": "not streamed"}]}),
+    "responses_plain": ("/v1/responses", {"model": "m", "input": "not streamed"}),
 }
 
 
@@ -273,3 +274,79 @@ def test_proxy_shuts_down_while_a_stall_holds_a_connection(recordings):
         th.start()
         time.sleep(0.3)
     assert time.monotonic() - t0 < 5                           # close() cancels the sleeping handler instead of waiting 60 s
+
+
+# ---- "200 OK but unusable": faults for non-streamed responses ---------------------------------------------------------------
+
+PLAIN_KINDS = ["openai_plain", "anthropic_plain", "responses_plain"]
+
+
+def split_response(r):
+    head, _, rest = r["bytes"].partition(b"\r\n\r\n")
+    return head.decode(), rest
+
+
+def length_signal(obj):
+    if "choices" in obj:
+        return obj["choices"][0]["finish_reason"]
+    if obj.get("object") == "response":
+        return obj["status"]
+    return obj["stop_reason"]
+
+
+@pytest.mark.parametrize("kind,signal", [("openai_plain", "length"), ("anthropic_plain", "max_tokens"), ("responses_plain", "incomplete")])
+def test_length_cut_is_a_valid_200_with_the_providers_length_signal(recordings, kind, signal):
+    r, p, ex = faulted(recordings, kind, "length_cut")
+    head, rest = split_response(r)
+    assert head.startswith("HTTP/1.1 200") and r["how"] == "complete"
+    obj = json.loads(rest)                                          # valid JSON: nothing looks broken to the HTTP layer or the parser
+    box, key = text_slot(obj)
+    full_box, full_key = text_slot(json.loads(ex.body))
+    short, full = box[key], full_box[full_key]
+    assert 0 < len(short) < len(full) and full.startswith(short)
+    assert length_signal(obj) == signal and length_signal(json.loads(ex.body)) != signal
+    assert p.requests[0]["fault"] == "length_cut"
+
+
+@pytest.mark.parametrize("kind", PLAIN_KINDS)
+def test_empty_content_is_a_valid_200_with_no_answer_text(recordings, kind):
+    r, p, ex = faulted(recordings, kind, "empty_content")
+    head, rest = split_response(r)
+    assert head.startswith("HTTP/1.1 200")
+    obj = json.loads(rest)
+    assert text_slot(obj) is None                                  # the answer text is gone ...
+    full_box, full_key = text_slot(json.loads(ex.body))
+    assert full_box[full_key] and full_box[full_key] not in rest.decode()
+    assert length_signal(obj) not in ("length", "max_tokens", "incomplete")      # ... and the provider claims a normal finish
+
+
+@pytest.mark.parametrize("kind", PLAIN_KINDS)
+def test_malformed_body_has_a_correct_content_length_but_is_not_json(recordings, kind):
+    r, p, ex = faulted(recordings, kind, "malformed_body")
+    head, rest = split_response(r)
+    assert head.startswith("HTTP/1.1 200") and r["how"] == "complete"
+    declared = int(next(l.split(":")[1] for l in head.split("\r\n") if l.lower().startswith("content-length:")))
+    assert declared == len(rest) < len(ex.body.encode())            # the HTTP layer sees a complete response
+    assert ex.body.encode().startswith(rest)
+    with pytest.raises(ValueError):
+        json.loads(rest)
+
+
+@pytest.mark.parametrize("fault", ["length_cut", "empty_content", "malformed_body"])
+def test_body_faults_do_not_apply_to_streams(recordings, fault):
+    assert not make_fault(fault).applies(recordings["openai_text"].exchanges[0])
+    assert not make_fault(fault).applies(recordings["anthropic_text"].exchanges[0])
+    assert make_fault(fault).applies(recordings["openai_plain"].exchanges[0])
+
+
+@pytest.mark.parametrize("fault", ["length_cut", "empty_content", "malformed_body"])
+def test_body_faults_heal_on_the_retry(recordings, fault):
+    rec = recordings["openai_plain"]
+    path, body = REQ["openai_plain"]
+    plan = FaultPlan(make_fault(fault), at=0, heal_after=1)
+    with ProxyThread(mode="replay", recording=rec, faults=plan) as p:
+        first = raw_post(p.port, path, body)
+        second = raw_post(p.port, path, body)
+    assert split_response(first)[1] != rec.exchanges[0].body.encode()
+    assert split_response(second)[1] == rec.exchanges[0].body.encode()       # the retry gets the real recorded answer
+    assert p.requests[1].get("healed") == fault

@@ -33,7 +33,14 @@ COMPLETION = {
     "anthropic-js": "check `stop_reason` on the final message and retry if it is missing",
     "vercel-ai": "check the result's `finishReason` and treat a missing or unknown reason as a failure",
 }
-GENERIC_COMPLETION = "verify the streamed response completed (a finish/stop reason was received) before using it; retry if not"
+BODY_ADVICE = {
+    "length_cut": ["check the stop reason on every reply: `finish_reason == \"length\"` (Anthropic `stop_reason == \"max_tokens\"`, "
+                   "Responses `status == \"incomplete\"`) means the answer was cut; retry with a higher `max_tokens` or treat it as incomplete"],
+    "empty_content": ["treat an empty answer as a failed call: retry once, then stop with a clear error; never pass empty text to the next step"],
+    "malformed_body": ["a body that is not valid JSON is a failed call: catch the parse error where the reply is read, and retry or stop "
+                       "with a clear error (a retry rule that only covers HTTP errors will not see it)"],
+}
+GENERIC_COMPLETION ="verify the streamed response completed (a finish/stop reason was received) before using it; retry if not"
 
 
 def advice(verdict, fault, requests=None):
@@ -45,6 +52,8 @@ def advice(verdict, fault, requests=None):
             ["the SDK waits for whatever Retry-After says; cap it, or fail fast and let your scheduler retry"]
             if fault.startswith("rate_limit") and sdk and sdk.startswith("anthropic") else [])
     if verdict in ("SILENT", "PARTIAL"):
+        if fault in BODY_ADVICE:
+            return BODY_ADVICE[fault]
         if fault in ("stream_cut_clean", "tool_args_cut", "idle_kill"):
             out = [COMPLETION.get(sdk, GENERIC_COMPLETION)]
             if fault == "tool_args_cut":

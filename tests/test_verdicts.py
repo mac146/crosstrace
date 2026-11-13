@@ -112,6 +112,29 @@ def _ex(i, stream=False):
                     headers=[], stream=stream, body="{}")
 
 
+def test_cut_non_streamed_answer_is_partial_when_printed_and_ended_early_when_not():
+    """Found on a real non-streaming client: a length_cut answer printed as complete was reported as ENDED_EARLY because only streamed
+    answers could be measured."""
+    import json
+    text = "Your order 42 ships on Friday and costs 12 euros."
+    body = json.dumps({"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]})
+    ex = Exchange(idx=0, path="/v1/chat/completions", provider="openai", key="k0", state_key="s0", request={}, status=200,
+                  headers=[], stream=False, body=body)
+    recd = Recording(exchanges=[ex])
+    sent = 22
+
+    def reqs(fault):
+        return [{"provider": "openai", "idx": 0, "how": "in_order", "t": 0, "fault": fault, "attempt": 1,
+                 "fault_detail": {"chars_sent": sent, "chars_total": len(text)}}]
+
+    r = classify("length_cut", 0, recd, reqs("length_cut"), 0, text[:sent], False, text)
+    assert r.verdict == "PARTIAL" and f"{sent} of {len(text)}" in r.detail
+    assert classify("length_cut", 0, recd, reqs("length_cut"), 0, "", False, text).verdict == "ENDED_EARLY"
+    assert classify("length_cut", 0, recd, reqs("length_cut"), 0, text, False, text).verdict == "ENDED_EARLY"        # printed the whole answer anyway
+    # chars_sent of a malformed body counts JSON characters, not answer text: never reported as a cut answer
+    assert classify("malformed_body", 0, recd, reqs("malformed_body"), 0, text[:sent], False, text).verdict == "ENDED_EARLY"
+
+
 def test_classify_unit_cases():
     recd = Recording(exchanges=[_ex(0), _ex(1)])
     base = {"provider": "openai"}

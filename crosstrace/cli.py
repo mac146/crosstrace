@@ -25,7 +25,10 @@ from crosstrace.proxy.recording import Recording
 from crosstrace.verdict import PROBLEM
 
 EXIT_OK, EXIT_PROBLEMS, EXIT_USAGE, EXIT_SETUP, EXIT_INTERNAL = 0, 1, 2, 3, 4
-NOT_APPLICABLE_WHY = {"tool_args_cut": "no streamed tool calls in the recordings"}
+NOT_APPLICABLE_WHY = {"tool_args_cut": "no streamed tool calls in the recordings",
+                      "length_cut": "no non-streamed text answers in the recordings",
+                      "empty_content": "no non-streamed text answers in the recordings",
+                      "malformed_body": "no non-streamed model calls in the recordings"}
 NOT_APPLICABLE_WHY.update({f: "no streamed model calls in the recordings" for f in
                            ("stream_cut_clean", "stream_cut_fin", "stream_cut_rst", "stream_stall", "slow_drip", "idle_kill",
                             "malformed_event", "stream_error_event")})

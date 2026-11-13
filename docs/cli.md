@@ -34,6 +34,14 @@ CrossTrace sets `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` to its local proxy fo
 The verdict is decided from the agent's next move after the fault, not by comparing final answers, so it is objective and needs no LLM
 judge. Trials whose verdict is already certain are stopped early.
 
+## Faults for non-streamed responses
+
+Many agents call the model without streaming, with an SDK or a hand-written HTTP client. Three faults return a response that looks fine
+to the HTTP layer and is not: `length_cut` (HTTP 200, the answer cut short, with the provider's own length signal: `finish_reason: "length"`,
+`stop_reason: "max_tokens"`, or Responses `status: "incomplete"`), `empty_content` (HTTP 200, a valid body with no answer text) and
+`malformed_body` (HTTP 200, a correct `Content-Length`, JSON cut off part way). They do not apply to streamed calls, which have their own
+faults. `length_cut` and `malformed_body` are in `pr` mode, `empty_content` in `nightly`.
+
 ## Coverage, and why one run is not enough
 
 `crosstrace record` records each input `runs` times; every recording is one path through your agent. `crosstrace test` injects each fault

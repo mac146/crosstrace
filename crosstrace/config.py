@@ -13,10 +13,10 @@ CONFIG_NAME = "crosstrace.toml"
 STATE_DIR = ".crosstrace"
 
 # PR mode: the faults that most often reveal hidden failures, fast and deterministic. Nightly: the whole catalog.
-PR_FAULTS = ["stream_cut_clean", "tool_args_cut", "stream_stall", "server_error", {"name": "overloaded", "heal": "never"}, "rate_limit",
-             "reset_before_response", "context_length"]
+PR_FAULTS = ["stream_cut_clean", "tool_args_cut", "stream_stall", "length_cut", "malformed_body", "server_error",
+             {"name": "overloaded", "heal": "never"}, "rate_limit", "reset_before_response", "context_length"]
 NIGHTLY_EXTRA = ["stream_cut_fin", "stream_cut_rst", "stream_error_event", "malformed_event", "idle_kill", "slow_first_byte", "unavailable",
-                 "rate_limit_http_date", "auth", {"name": "server_error", "heal": "never"}]
+                 "rate_limit_http_date", "auth", "empty_content", {"name": "server_error", "heal": "never"}]
 DEFAULT_MODES = {
     "pr": {"faults": PR_FAULTS, "max_exchanges": 4, "stability_runs": 1, "jobs": 4},
     "nightly": {"faults": PR_FAULTS + NIGHTLY_EXTRA, "max_exchanges": 0, "stability_runs": 2, "jobs": 4},
