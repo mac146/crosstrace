@@ -54,10 +54,10 @@ Every row is what CrossTrace reported after its verdicts were corrected against 
 |---|---|---|---|
 | LangGraph (`create_react_agent`) | **ran the tool on the cut arguments**, printed a cut answer as complete | hangs (no read timeout) | errors before the stream recovered |
 | OpenAI Agents SDK (Responses API) | raised an error (it waits for the completed event) | hangs; `set_default_openai_client(AsyncOpenAI(timeout=...))` turns it into an error | errors before the stream recovered |
-| pydantic-ai | refused the cut tool call and told the model (one case: arguments were already complete and it ran the tool); printed a cut answer as complete, also for a Responses `incomplete` status | hangs; `model_settings={"timeout": 20}` turns it into an error | empty reply re-prompted |
-| CrewAI (native openai client) | printed a cut answer as complete | hangs; `LLM(timeout=20)` recovers | context-length error summarised and continued; a persistent outage retried 7+ times in about 3 s |
+| pydantic-ai | refused the cut tool call and told the model (one case: arguments were already complete and it ran the tool); printed a cut answer as complete, also for a Responses `incomplete` status | hangs; `model_settings={"timeout": ...}` turns it into an error | empty reply re-prompted |
+| CrewAI (native openai client) | printed a cut answer as complete | hangs; `LLM(timeout=...)` recovers | context-length error summarised and continued; a persistent outage retried 7+ times in about 3 s |
 
-The "turns it into an error" fixes were run, not assumed. A mid-stream stall is raised, not retried, in all three.
+The timeout fixes were run, not assumed (with 10 seconds). In the three streamed agents (LangGraph, the Agents SDK, pydantic-ai) a stall in the middle of a stream is raised, not retried.
 
 ## Try it (no API key)
 
