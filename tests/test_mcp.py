@@ -322,3 +322,20 @@ def test_lost_response_is_planned_at_every_recorded_tool_call_and_only_there():
     fs = C.FaultSpec("lost_response")
     assert [(pi, k) for pi, _, k in runner.plan_trials([plain, with_tools], [fs])] == [(1, 0), (1, 1), (1, 2)]
     assert len(tool_calls(with_tools.meta["mcp"]["calls"])) == 3
+
+
+def test_a_repeat_that_carries_an_idempotency_key_is_not_a_duplicate():
+    from crosstrace.mcp.ledger import carries_idempotency_key
+    keyed = {"order": 7, "idempotency_key": "abc-1"}
+    calls = [{"method": "tools/call", "params": {"name": "refund", "arguments": keyed}, "result": {}, "error": None}]
+
+    def run(args, n):
+        return [{"seq": i, "tool": "refund", "args_key": args_key(args), "write": True, "faulted": False, "attempt": 1, "unrecorded": False}
+                for i in range(n)]
+
+    assert excess_writes(calls, run(keyed, 2)) == []
+    plain = {"order": 7}
+    assert excess_writes([{"method": "tools/call", "params": {"name": "refund", "arguments": plain}, "result": {}, "error": None}],
+                         run(plain, 2)) != []
+    assert carries_idempotency_key(args_key({"requestId": "x"})) and carries_idempotency_key(args_key({"Idempotency-Key": "x"}))
+    assert not carries_idempotency_key(args_key({"idempotency_key": ""})) and not carries_idempotency_key(args_key({"note": {"request_id": "x"}}))

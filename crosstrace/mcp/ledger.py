@@ -42,6 +42,19 @@ def args_key(arguments):
     return json.dumps(arguments or {}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+IDEMPOTENCY_FIELDS = {"idempotencykey", "idempotencytoken", "idempotencyid", "clienttoken", "requestid", "dedupekey", "deduplicationid", "clientrequestid"}
+
+
+def carries_idempotency_key(key):
+    """True when the arguments (an args_key string) hold a non-empty idempotency key. The same call repeated with the same key is the retry
+    the pattern is made for: the server is meant to run it once. Only a top-level argument counts, matched ignoring case, '_' and '-'."""
+    try:
+        args = json.loads(key)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(args, dict) and any(re.sub(r"[_\-]", "", str(k)).lower() in IDEMPOTENCY_FIELDS and v not in (None, "", 0) for k, v in args.items())
+
+
 def tool_calls(calls):
     """The recorded tools/call exchanges, in order (the recording also holds initialize, tools/list, ...)."""
     return [c for c in calls if c.get("method") == "tools/call"]
@@ -84,7 +97,9 @@ def effective_lists(config, calls):
 def excess_writes(calls, ledger, writes=(), reads=(), idempotent=()):
     """[(tool, args_key, expected, executed)] for every write that ran more often than in the healthy run (expected may be 0).
 
-    A tool the server declares idempotent is skipped: running it again changes nothing."""
+    A tool the server declares idempotent is skipped: running it again changes nothing. So is a call whose arguments carry an idempotency key:
+    repeating it with the same key is what the key is for (the report does not claim the server honours it)."""
     expected = Counter(k for k in map(call_key, tool_calls(calls)) if is_write(k[0], writes, reads) and k[0] not in idempotent)
-    executed = Counter((e["tool"], e["args_key"]) for e in ledger if e.get("write") and e["tool"] not in idempotent)
+    executed = Counter((e["tool"], e["args_key"]) for e in ledger if e.get("write") and e["tool"] not in idempotent
+                       and not carries_idempotency_key(e["args_key"]))
     return [(tool, key, expected.get((tool, key), 0), n) for (tool, key), n in executed.items() if n > expected.get((tool, key), 0)]

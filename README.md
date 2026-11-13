@@ -200,9 +200,9 @@ scripted, so it tests the tool-call handling, not how well a model drives a brow
   environment, so pass it on (the example does).
 - Replay cannot answer a state check. An agent that asks a read tool "did it go through?" before retrying gets the recorded answer, or
   "not recorded", so it shows as stopping with an error, not as recovering safely.
-- A retry counts as a repeat unless the server declares the tool idempotent (`idempotentHint`). An idempotency key you pass in the
-  arguments is not recognised: the server may ignore the repeat and CrossTrace cannot tell. The official Playwright server declares
-  `readOnlyHint` for 6 of its 25 tools and no `idempotentHint`.
+- A retry counts as a repeat unless the server declares the tool idempotent (`idempotentHint`) or the call carries an idempotency key as a
+  top-level argument (`idempotency_key`, `request_id`, `client_token` and similar). CrossTrace takes the key at its word: it cannot tell
+  whether the server honours it. The official Playwright server declares `readOnlyHint` for 6 of its 25 tools and no `idempotentHint`.
 - The repeat is counted in replay, from a log of the tool calls. CrossTrace does not run a second real click to show the site receiving two
   orders; it counts the second call the agent made.
 - The lost response is a transport error on a live session, not a dead server process.
