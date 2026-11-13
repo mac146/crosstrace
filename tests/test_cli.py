@@ -206,3 +206,12 @@ def test_a_crash_is_exit_4_not_exit_1(monkeypatch, capsys):
 def test_faults_lists_the_catalog(capsys):
     code, out, _ = run(capsys, "faults")
     assert code == 0 and "stream_cut_clean" in out and "!persistent" in out
+
+
+def test_the_openai_agents_sdk_is_recognised_and_gets_its_own_timeout_advice():
+    """Found on a real agent: the SDK identifies itself as "Agents/Python <version>", and the generic advice does not say how to set its client."""
+    from crosstrace import fixes
+    reqs = [{"user-agent": "Agents/Python 0.24.0"}]
+    assert fixes.sdk_family(reqs) == "openai-agents"
+    assert any("set_default_openai_client" in line for line in fixes.advice("HANG", "stream_stall", reqs))
+    assert fixes.sdk_family([{"user-agent": "OpenAI/Python 3.50.0"}]) == "openai-python"              # unchanged

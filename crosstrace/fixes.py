@@ -9,6 +9,8 @@ def sdk_family(requests):
             return "anthropic-python"
         if "anthropic/js" in ua:
             return "anthropic-js"
+        if "agents/python" in ua:                     # the OpenAI Agents SDK sends "Agents/Python <version>"
+            return "openai-agents"
         if "openai/python" in ua:
             return "openai-python"
         if "openai/js" in ua:
@@ -22,6 +24,9 @@ TIMEOUT = {
     "openai-python": "pass a read timeout: `OpenAI(timeout=httpx.Timeout(60.0, read=20.0))` (the default is 600 s); "
                      "with LangChain: `ChatOpenAI(timeout=30)`",
     "anthropic-python": "pass a read timeout: `Anthropic(timeout=httpx.Timeout(60.0, read=20.0))` (the default is 10 minutes)",
+    "openai-agents": "give the SDK a client with a read timeout: `set_default_openai_client(AsyncOpenAI(timeout=httpx.Timeout(60.0, read=20.0)))` "
+                     "(the default is 600 s). A stall in the middle of a stream is then raised, not retried: wrap `Runner.run` in your own retry "
+                     "if the agent should recover",
     "openai-js": "pass `timeout` (ms) to the client or the request, e.g. `new OpenAI({ timeout: 20_000 })`",
     "anthropic-js": "pass `timeout` (ms) to the client or the request, e.g. `new Anthropic({ timeout: 20_000 })`",
     "vercel-ai": "pass an `abortSignal` with a timeout, e.g. `AbortSignal.timeout(20_000)`",
