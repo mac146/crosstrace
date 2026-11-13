@@ -42,6 +42,27 @@ to the HTTP layer and is not: `length_cut` (HTTP 200, the answer cut short, with
 `malformed_body` (HTTP 200, a correct `Content-Length`, JSON cut off part way). They do not apply to streamed calls, which have their own
 faults. `length_cut` and `malformed_body` are in `pr` mode, `empty_content` in `nightly`.
 
+## MCP tool calls
+
+Launch your MCP server through the wrapper in your agent's MCP config: `["crosstrace", "mcp-wrap", "--", "python", "server.py"]`. Outside
+CrossTrace the wrapper just runs the server. Under `crosstrace record` it passes everything through and records each request with its
+response; under `crosstrace test` it answers from the recording and never starts the real server.
+
+Your MCP client must give the wrapper `CROSSTRACE_MCP` (CrossTrace sets it for the agent process). Clients that start servers with a reduced
+environment, such as the official Python SDK, need it passed on explicitly. One wrapped server per agent.
+
+`lost_response` (`[faults.lost_response]`: `how = "error"` (default, a transport error) or `"silent"` (nothing; an agent with no tool timeout
+hangs), `persistent = true` to keep failing the retries) loses the response to each recorded tool call in turn. The tool counts as having run.
+
+`DUPLICATE`: a write ran more often than in the healthy run. It is checked in every trial, including model faults, so an agent that recovers
+from a model failure by redoing a tool call is caught. Which tools are writes is guessed from their names; override it:
+
+```toml
+[mcp]
+writes = ["run_report"]        # tools that change something although their name does not say so
+reads = ["send_preview"]       # tools that only read although their name sounds like a write
+```
+
 ## Coverage, and why one run is not enough
 
 `crosstrace record` records each input `runs` times; every recording is one path through your agent. `crosstrace test` injects each fault
@@ -89,7 +110,7 @@ See [`action.yml`](../action.yml) and [`examples/github/crosstrace.yml`](../exam
 
 ## Limits (v0.1)
 
-- Model calls only (OpenAI chat completions and Responses, Anthropic Messages). Tool calls (MCP) are not tested yet; the planned `lost_response` fault and `DUPLICATE` verdict are described in the README roadmap.
+- Model calls only (OpenAI chat completions and Responses, Anthropic Messages). Tool calls: MCP servers over stdio (see "MCP tool calls" below); other tool kinds are not tested.
 - Plain HTTP/1.1 between your agent and the local proxy; connection findings carry that protocol.
 - Agents that make model calls concurrently are matched correctly, but the verdict assumes the faulted call's result is needed before
   the next call.

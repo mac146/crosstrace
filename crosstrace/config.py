@@ -14,7 +14,7 @@ STATE_DIR = ".crosstrace"
 
 # PR mode: the faults that most often reveal hidden failures, fast and deterministic. Nightly: the whole catalog.
 PR_FAULTS = ["stream_cut_clean", "tool_args_cut", "stream_stall", "length_cut", "malformed_body", "server_error",
-             {"name": "overloaded", "heal": "never"}, "rate_limit", "reset_before_response", "context_length"]
+             {"name": "overloaded", "heal": "never"}, "rate_limit", "reset_before_response", "context_length", "lost_response"]
 NIGHTLY_EXTRA = ["stream_cut_fin", "stream_cut_rst", "stream_error_event", "malformed_event", "idle_kill", "slow_first_byte", "unavailable",
                  "rate_limit_http_date", "auth", "empty_content", {"name": "server_error", "heal": "never"}]
 DEFAULT_MODES = {
@@ -22,7 +22,7 @@ DEFAULT_MODES = {
     "nightly": {"faults": PR_FAULTS + NIGHTLY_EXTRA, "max_exchanges": 0, "stability_runs": 2, "jobs": 4},
 }
 VERDICTS_ALLOWED_IN_ALLOW = {"ENDED_EARLY", "RECOVERED_DIFFERENT", "SILENT", "PARTIAL", "HANG", "RETRY_STORM", "IGNORED_RETRY_AFTER",
-                             "WRONG_RETRY"}
+                             "WRONG_RETRY", "DUPLICATE"}
 
 TEMPLATE = '''# CrossTrace configuration. Docs: crosstrace --help, crosstrace faults
 # Recordings in .crosstrace/recordings/ are meant to be committed (CI replays them without API keys).
@@ -55,6 +55,12 @@ allow = []
 
 # [faults.stream_stall]    # fault parameters, see: crosstrace faults
 # stall_s = 90
+
+# MCP tools: launch your MCP server as ["crosstrace", "mcp-wrap", "--", <its usual command>] (see docs/cli.md).
+# CrossTrace guesses which tools write (send, submit, pay, delete, click, ...); list the ones it gets wrong.
+# [mcp]
+# writes = ["run_report"]
+# reads = ["refund_status"]
 '''
 
 
@@ -97,6 +103,7 @@ class Config:
     trial_timeout_s: float
     modes: dict
     fault_params: dict
+    mcp: dict = field(default_factory=dict)          # {"writes": [...], "reads": [...]}: tool names that override the write heuristic
 
     @property
     def state_dir(self):
@@ -152,7 +159,12 @@ def load(path=None):
 
 
 def parse(d, root):
-    _check_keys("crosstrace.toml", d, {"agent", "record", "replay", "test", "modes", "faults"})
+    _check_keys("crosstrace.toml", d, {"agent", "record", "replay", "test", "modes", "faults", "mcp"})
+    mcp = d.get("mcp") or {}
+    _check_keys("[mcp]", mcp, {"writes", "reads"})
+    for key in ("writes", "reads"):
+        if not isinstance(mcp.get(key, []), list) or not all(isinstance(x, str) for x in mcp.get(key, [])):
+            raise ConfigError(f"[mcp] {key}: a list of tool names")
     agent = d.get("agent") or {}
     _check_keys("[agent]", agent, {"command", "inputs", "timeout_s", "cwd", "env"})
     cmd = agent.get("command")
@@ -205,7 +217,8 @@ def parse(d, root):
     return Config(root=root, command=list(cmd), inputs=list(inputs), timeout_s=float(agent.get("timeout_s", 120)),
                   cwd=os.path.join(root, agent.get("cwd", ".")), env={k: str(v) for k, v in (agent.get("env") or {}).items()},
                   runs=max(1, int(rec.get("runs", 1))), upstreams=dict(upstreams), masks=list(rep.get("masks", [])), allow=allow,
-                  trial_timeout_s=test.get("trial_timeout_s"), modes=modes, fault_params=fault_params)
+                  trial_timeout_s=test.get("trial_timeout_s"), modes=modes, fault_params=fault_params,
+                  mcp={"writes": list(mcp.get("writes", [])), "reads": list(mcp.get("reads", []))})
 
 
 def template(command):

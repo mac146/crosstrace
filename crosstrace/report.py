@@ -6,9 +6,16 @@ import time
 
 from crosstrace import __version__
 from crosstrace.fixes import advice, churn_advice
+from crosstrace.proxy.faults import TOOL_FAULTS
 from crosstrace.verdict import ORDER, PROBLEM, REVIEW, SETUP
 
 SCHEMA = "crosstrace.report/1"
+
+
+def _where(t):
+    """"path 0 exchange 2" for a model call, "path 0 tool call 1" for an MCP tool call."""
+    unit = "tool call" if t["fault"].split("!")[0] in TOOL_FAULTS else "exchange"
+    return f"path {t['path']} {unit} {t['at']}"
 
 
 def build(cfg, mode, recordings, stability, results, seconds, seed, not_applicable=None):
@@ -122,7 +129,7 @@ def render_text(rep):
         line = f"{col}{m}{end} {name.ljust(width)}  {_counts(f)}"
         t = _example(rep, name)
         if t:
-            line += f"\n  {' ' * width}  {dim}e.g. path {t['path']} exchange {t['at']}: {t['detail']}{end}"
+            line += f"\n  {' ' * width}  {dim}e.g. {_where(t)}: {t['detail']}{end}"
         out.append(line)
     for name, why in rep.get("not_applicable", {}).items():
         out.append(f"{dim}- {name.ljust(width)}  not applicable: {why}{end}")
@@ -160,7 +167,7 @@ def render_markdown(rep):
     out += ["| | fault | verdicts | example |", "|---|---|---|---|"]
     for name, f in rep["faults"].items():
         t = _example(rep, name)
-        eg = f"path {t['path']} exchange {t['at']}: {t['detail']}" if t else ""
+        eg = f"{_where(t)}: {t['detail']}" if t else ""
         out.append(f"| {_mark(f['worst'], allowed, True)} | `{name}` | {_counts(f)} | {eg.replace('|', '/')} |")
     for name, why in rep.get("not_applicable", {}).items():
         out.append(f"| ➖ | `{name}` | not applicable | {why} |")

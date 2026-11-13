@@ -20,12 +20,14 @@ import sys
 import time
 
 from crosstrace import __version__, config as C, report as R, runner
+from crosstrace.mcp.ledger import is_write, tool_calls
 from crosstrace.proxy.faults import CATALOG, make_fault
 from crosstrace.proxy.recording import Recording
 from crosstrace.verdict import PROBLEM
 
 EXIT_OK, EXIT_PROBLEMS, EXIT_USAGE, EXIT_SETUP, EXIT_INTERNAL = 0, 1, 2, 3, 4
 NOT_APPLICABLE_WHY = {"tool_args_cut": "no streamed tool calls in the recordings",
+                      "lost_response": "no MCP tool calls were recorded: launch the MCP server as `crosstrace mcp-wrap -- <command>`",
                       "length_cut": "no non-streamed text answers in the recordings",
                       "empty_content": "no non-streamed text answers in the recordings",
                       "malformed_body": "no non-streamed model calls in the recordings"}
@@ -65,7 +67,7 @@ def cmd_init(a):
 
 def spec_for(cfg, command, timeout_s=None):
     return runner.AgentSpec(command=command, cwd=cfg.cwd, env=cfg.env, timeout_s=timeout_s or cfg.timeout_s, upstreams=cfg.upstreams,
-                            masks=cfg.masks)
+                            masks=cfg.masks, mcp=cfg.mcp)
 
 
 def cmd_record(a):
@@ -94,8 +96,11 @@ def cmd_record(a):
             saved += 1
             st = runner.stability(spec_for(cfg, cmd), rec, runs=2)
             streamed = sum(e.stream for e in rec.exchanges)
-            print(f"  {name}: {len(rec.exchanges)} model calls ({streamed} streamed), {rec.meta['seconds']:.1f} s, replay "
-                  + ("stable" if st["stable"] else "NOT stable"))
+            mcp_calls = tool_calls((rec.meta.get("mcp") or {}).get("calls", []))
+            writes = sum(is_write(c["params"]["name"], cfg.mcp["writes"], cfg.mcp["reads"]) for c in mcp_calls)
+            print(f"  {name}: {len(rec.exchanges)} model calls ({streamed} streamed)"
+                  + (f", {len(mcp_calls)} MCP tool calls ({writes} writes)" if mcp_calls else "")
+                  + f", {rec.meta['seconds']:.1f} s, replay " + ("stable" if st["stable"] else "NOT stable"))
             fails = rec.meta.get("upstream_failures", [])
             if fails:
                 print(f"    note: the real provider failed {len(fails)} time(s) during this run "
@@ -206,7 +211,8 @@ def cmd_faults(a):
         f = make_fault(name)
         doc = (inspect.getdoc(type(f)) or "").split("\n")[0]
         params = ", ".join(f"{k}={v}" for k, v in f.p.items())
-        print(f"{name:24s} {'streams only  ' if f.stream_only else ''}{doc}" + (f"  [{params}]" if params else ""))
+        label = "streams only  " if f.stream_only else "MCP tool calls " if f.tool_fault else ""
+        print(f"{name:24s} {label}{doc}" + (f"  [{params}]" if params else ""))
     print("\nIn crosstrace.toml or --fault: \"name\" heals after one failed attempt; \"name!persistent\" never heals.")
     return EXIT_OK
 
@@ -244,7 +250,15 @@ def build_parser():
     p.set_defaults(fn=cmd_report)
     p = sub.add_parser("faults", help="list faults")
     p.set_defaults(fn=cmd_faults)
+    p = sub.add_parser("mcp-wrap", help="run an MCP server through CrossTrace (put this in your agent's MCP config)")
+    p.add_argument("server", nargs=argparse.REMAINDER, help="-- <the server's usual command and arguments>")
+    p.set_defaults(fn=cmd_mcp_wrap)
     return ap
+
+
+def cmd_mcp_wrap(a):
+    from crosstrace.mcp import wrap
+    return wrap.main(a.server)
 
 
 def main(argv=None):

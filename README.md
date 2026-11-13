@@ -128,27 +128,42 @@ Details: [docs/cli.md](docs/cli.md). Fault list: `crosstrace faults`.
 Early (v0.1). Tested end to end on the example agents here and the SDK matrix above; not yet on anyone else's production agent. If you
 try it on yours, an issue with what it found (or got wrong) is the most useful thing you can send.
 
-- Model calls only today: OpenAI chat completions and Responses, Anthropic Messages. Tool calls are not tested yet.
+- Model calls: OpenAI chat completions and Responses, Anthropic Messages. Tool calls: MCP over stdio only, see above.
 - Python 3.11+. Your agent can be in any language; it just has to be runnable as a command.
 - The healthy run must be repeatable enough to replay. Random values in prompts need a mask; heavy run-to-run variation in what your
   agent does needs several recorded runs.
 
-## Roadmap: tool calls (MCP)
+## Tool calls (MCP): a tool that ran but whose reply was lost
 
-Planned, not built. The next step is a proxy for MCP tool calls, with the same record, replay and fault approach as for model calls.
-The fault that matters most there is **the tool succeeded but its response was lost**. The tool did its work (sent the email, charged
-the card, submitted the form), the reply never reached the agent, and a retry does the work a second time.
+A model call that fails is annoying. A tool call that **succeeded but whose response was lost** can do damage: the email was sent, the
+card was charged, the form was submitted, the reply never reached the agent, and a retry does it a second time.
 
-- **Fault:** `lost_response` runs the tool for real during recording, then drops the reply at the byte level.
-- **What it will measure:** how many times the agent triggers a write after the fault, **including after it recovers**. A run that
-  recovers and finishes with the right answer can still have written twice, so recovering is not enough to pass.
-- **New verdict:** `DUPLICATE`, when a tool that changes something (sends, pays, deletes, updates, submits) is called again with the
-  same arguments after a lost response.
-- **Browser actions count too.** A retried "click submit" or "place order" step is the same failure as a retried `send_email`. Which
-  tools count as writes will be listed in config, with a default guess from tool names.
+CrossTrace tests this for MCP servers that run over stdio. One change in your agent's MCP config: launch the server as
+`crosstrace mcp-wrap -- <its usual command>`. The wrapper records the tool calls in `crosstrace record`, and in `crosstrace test` it
+**replays them without starting the real server**, so a test cannot cause a side effect.
 
-Not decided yet: how to tell a repeat that is safe (an idempotent tool, or one called with an idempotency key) from one that isn't, without
-asking you to annotate every tool.
+- **`lost_response`:** one tool call is made (and counted), and its reply is replaced by a transport error. Then we watch what the agent does.
+- **Write counting:** every call to a tool that changes something is logged. A write that ran more often than in the healthy run is a
+  **`DUPLICATE`**, in **every** trial, not only this one. A run that recovers and prints the right answer can still have written twice, so
+  recovering is not enough to pass. The same check catches an agent that recovers from a *model* failure by starting the task over.
+- **Which tools are writes:** guessed from the name (`send`, `submit`, `pay`, `delete`, `click`, ...; `get`, `list`, `status` are reads).
+  List the ones it gets wrong in `[mcp] writes` / `reads`. A browser tool that clicks is a write by default.
+
+```
+✗ lost_response   DUPLICATE 1/1
+                  e.g. path 0 tool call 0: refund({"amount":129.99,"customer_id":"42",...}) ran 2 time(s), 1 in the healthy run;
+                  the agent recovered and finished, but the write was repeated
+```
+
+Runnable without any key: [examples/mcp_agents](examples/mcp_agents) (`pip install mcp openai`). **What this does not do yet:**
+
+- Only stdio MCP servers, and one wrapped server per agent. Servers over streamable HTTP are not covered.
+- Your MCP client must start the wrapper with `CROSSTRACE_MCP` in its environment. The official Python SDK starts servers with a reduced
+  environment, so pass it on (the example does).
+- Replay cannot answer a state check. An agent that asks a read tool "did it go through?" before retrying gets the recorded answer, or
+  "not recorded", so it shows as stopping with an error, not as recovering safely.
+- A retry with the same arguments counts as a repeat even if the server would have ignored it (an idempotency key it remembers).
+- The lost response is a transport error on a live session, not a dead server process.
 
 ## Background
 

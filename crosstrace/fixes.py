@@ -62,6 +62,12 @@ def advice(verdict, fault, requests=None):
             return out
         return ["do not catch broad exceptions around model or tool calls and carry on; retry, or stop with a clear error",
                 "if the agent must continue, tell the model explicitly that the step failed instead of passing empty or partial data"]
+    if verdict == "DUPLICATE":
+        return ["do not blindly retry a tool that changes something: when its response is lost you cannot know whether it ran",
+                "before retrying, check the state with a read tool (an order status, a sent-mail list, the page after a submit); retry only "
+                "if the change did not happen",
+                "give each write an idempotency key (a request id the tool remembers) so a repeat is ignored, and pass the same key on a retry",
+                "if you cannot check, stop with a clear error and say that the outcome is unknown"]
     if verdict == "RETRY_STORM":
         return ["cap retries (3-5) with exponential backoff and jitter; on a persistent outage, stop and surface the error",
                 "prefer the SDK's built-in retries (`max_retries`) over a hand-written loop"]

@@ -1,0 +1,351 @@
+{
+ "exchanges": [
+  {
+   "idx": 0,
+   "path": "/v1/chat/completions",
+   "provider": "openai",
+   "key": "29d2e3bd2fafa08a",
+   "state_key": "f6e3fad48516526c",
+   "request": {
+    "model": "mock",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Customer 42 reports a damaged item. Refund them."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "refund",
+       "description": "Refund a customer. This moves money: calling it twice refunds twice.",
+       "parameters": {
+        "properties": {
+         "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+         },
+         "action": {
+          "title": "Action",
+          "type": "string"
+         },
+         "amount": {
+          "title": "Amount",
+          "type": "number"
+         },
+         "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+         }
+        },
+        "required": [
+         "customer_id",
+         "action",
+         "amount"
+        ],
+        "type": "object",
+        "title": "refundArguments"
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "refund_status",
+       "description": "How much has been refunded to this customer so far.",
+       "parameters": {
+        "properties": {
+         "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+         }
+        },
+        "required": [
+         "customer_id"
+        ],
+        "type": "object",
+        "title": "refund_statusArguments"
+       }
+      }
+     }
+    ]
+   },
+   "status": 200,
+   "headers": [
+    [
+     "content-type",
+     "application/json"
+    ]
+   ],
+   "stream": false,
+   "body": "{\"id\": \"chatcmpl-mock\", \"object\": \"chat.completion\", \"created\": 0, \"model\": \"mock\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_mock\", \"type\": \"function\", \"function\": {\"name\": \"refund\", \"arguments\": \"{\\\"customer_id\\\": \\\"42\\\", \\\"action\\\": \\\"refund\\\", \\\"amount\\\": 129.99, \\\"note\\\": \\\"customer reported a damaged item on delivery\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1, \"completion_tokens\": 10, \"total_tokens\": 11}}",
+   "events": [],
+   "event_ms": [],
+   "duration_ms": 71.19
+  },
+  {
+   "idx": 1,
+   "path": "/v1/chat/completions",
+   "provider": "openai",
+   "key": "34a00f64fb82a7df",
+   "state_key": "8446c517bf630101",
+   "request": {
+    "model": "mock",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Customer 42 reports a damaged item. Refund them."
+     },
+     {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+       {
+        "id": "call_mock",
+        "type": "function",
+        "function": {
+         "name": "refund",
+         "arguments": "{\"customer_id\": \"42\", \"action\": \"refund\", \"amount\": 129.99, \"note\": \"customer reported a damaged item on delivery\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call_mock",
+      "content": "refund of 129.99 issued to customer 42"
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "refund",
+       "description": "Refund a customer. This moves money: calling it twice refunds twice.",
+       "parameters": {
+        "properties": {
+         "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+         },
+         "action": {
+          "title": "Action",
+          "type": "string"
+         },
+         "amount": {
+          "title": "Amount",
+          "type": "number"
+         },
+         "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+         }
+        },
+        "required": [
+         "customer_id",
+         "action",
+         "amount"
+        ],
+        "type": "object",
+        "title": "refundArguments"
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "refund_status",
+       "description": "How much has been refunded to this customer so far.",
+       "parameters": {
+        "properties": {
+         "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+         }
+        },
+        "required": [
+         "customer_id"
+        ],
+        "type": "object",
+        "title": "refund_statusArguments"
+       }
+      }
+     }
+    ]
+   },
+   "status": 200,
+   "headers": [
+    [
+     "content-type",
+     "application/json"
+    ]
+   ],
+   "stream": false,
+   "body": "{\"id\": \"chatcmpl-mock\", \"object\": \"chat.completion\", \"created\": 0, \"model\": \"mock\", \"choices\": [{\"index\": 0, \"message\": {\"role\": \"assistant\", \"content\": \"ok ok ok ok ok ok ok ok \"}, \"finish_reason\": \"stop\"}], \"usage\": {\"prompt_tokens\": 1, \"completion_tokens\": 8, \"total_tokens\": 9}}",
+   "events": [],
+   "event_ms": [],
+   "duration_ms": 2.09
+  }
+ ],
+ "created": 1794545274.5568378,
+ "version": 1,
+ "meta": {
+  "mcp": {
+   "calls": [
+    {
+     "method": "initialize",
+     "params": {
+      "protocolVersion": "2025-11-25",
+      "capabilities": {},
+      "clientInfo": {
+       "name": "mcp",
+       "version": "0.1.0"
+      }
+     },
+     "result": {
+      "capabilities": {
+       "prompts": {
+        "listChanged": false
+       },
+       "resources": {
+        "listChanged": false,
+        "subscribe": false
+       },
+       "tools": {
+        "listChanged": false
+       }
+      },
+      "protocolVersion": "2025-11-25",
+      "serverInfo": {
+       "name": "refunds",
+       "version": ""
+      }
+     },
+     "error": null
+    },
+    {
+     "method": "tools/list",
+     "params": null,
+     "result": {
+      "tools": [
+       {
+        "description": "Refund a customer. This moves money: calling it twice refunds twice.",
+        "inputSchema": {
+         "properties": {
+          "customer_id": {
+           "title": "Customer Id",
+           "type": "string"
+          },
+          "action": {
+           "title": "Action",
+           "type": "string"
+          },
+          "amount": {
+           "title": "Amount",
+           "type": "number"
+          },
+          "note": {
+           "default": "",
+           "title": "Note",
+           "type": "string"
+          }
+         },
+         "required": [
+          "customer_id",
+          "action",
+          "amount"
+         ],
+         "type": "object",
+         "title": "refundArguments"
+        },
+        "name": "refund",
+        "outputSchema": {
+         "properties": {
+          "result": {
+           "title": "Result",
+           "type": "string"
+          }
+         },
+         "required": [
+          "result"
+         ],
+         "type": "object",
+         "title": "refundOutput"
+        }
+       },
+       {
+        "description": "How much has been refunded to this customer so far.",
+        "inputSchema": {
+         "properties": {
+          "customer_id": {
+           "title": "Customer Id",
+           "type": "string"
+          }
+         },
+         "required": [
+          "customer_id"
+         ],
+         "type": "object",
+         "title": "refund_statusArguments"
+        },
+        "name": "refund_status",
+        "outputSchema": {
+         "properties": {
+          "result": {
+           "title": "Result",
+           "type": "string"
+          }
+         },
+         "required": [
+          "result"
+         ],
+         "type": "object",
+         "title": "refund_statusOutput"
+        }
+       }
+      ]
+     },
+     "error": null
+    },
+    {
+     "method": "tools/call",
+     "params": {
+      "name": "refund",
+      "arguments": {
+       "customer_id": "42",
+       "action": "refund",
+       "amount": 129.99,
+       "note": "customer reported a damaged item on delivery"
+      }
+     },
+     "result": {
+      "content": [
+       {
+        "text": "refund of 129.99 issued to customer 42",
+        "type": "text"
+       }
+      ],
+      "isError": false,
+      "structuredContent": {
+       "result": "refund of 129.99 issued to customer 42"
+      }
+     },
+     "error": null
+    }
+   ]
+  },
+  "command": [
+   "python",
+   "agent.py",
+   "--mode",
+   "naive"
+  ],
+  "stdout": "ok ok ok ok ok ok ok ok \n",
+  "exit_code": 0,
+  "seconds": 4.38,
+  "input": ""
+ }
+}

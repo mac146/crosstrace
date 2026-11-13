@@ -142,6 +142,7 @@ def stream_error_event(provider):
 class Fault:
     name = "fault"
     stream_only = False
+    tool_fault = False                  # True: injected into MCP tool calls by the wrapper, not served by the model proxy
     defaults = {}
 
     def __init__(self, **params):
@@ -452,7 +453,28 @@ class MalformedBody(Fault):
         return True
 
 
+class LostResponse(Fault):
+    """MCP tool call: the tool ran, but its response never reaches the agent (how=error: a transport error; how=silent: nothing at all).
+    Needs the MCP server to be launched through `crosstrace mcp-wrap`. Counts every write the agent makes afterwards."""
+    name, defaults = "lost_response", {"how": "error", "persistent": False}
+    tool_fault = True
+
+    def __init__(self, **params):
+        super().__init__(**params)
+        if self.p["how"] not in ("error", "silent"):
+            raise ValueError("lost_response: how must be \"error\" or \"silent\"")
+
+    def applies(self, ex):
+        return False                                    # applies to MCP tool calls, never to a model exchange
+
+    async def serve(self, rw, ex, entry):
+        raise NotImplementedError("lost_response is served by the MCP wrapper, not the model proxy")
+
+
+TOOL_FAULTS = {"lost_response"}
+
 CATALOG = {
+    "lost_response": lambda **p: LostResponse(**p),
     "length_cut": lambda **p: LengthCut(**p),
     "empty_content": lambda **p: EmptyContent(**p),
     "malformed_body": lambda **p: MalformedBody(**p),

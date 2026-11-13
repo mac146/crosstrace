@@ -2,7 +2,9 @@
 
 The agent is any command. The only thing changed for it is its environment: OPENAI_BASE_URL and ANTHROPIC_BASE_URL point at the proxy.
 """
+import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -10,6 +12,9 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 
+from crosstrace.mcp.ledger import tool_calls
+from crosstrace.mcp.verdict import classify_tool, write_check
+from crosstrace.mcp.wrap import ENV as MCP_ENV
 from crosstrace.proxy import FaultPlan, ProxyThread, make_fault
 from crosstrace.proxy.recording import Recording
 from crosstrace.verdict import TrialResult, attempts_at, classify, early_silent, STORM_LIMIT
@@ -27,12 +32,15 @@ class AgentSpec:
     timeout_s: float = 120.0              # budget per run; a trial past it is a HANG
     upstreams: dict = field(default_factory=dict)   # record mode: provider -> base URL (default: the real providers)
     masks: list = field(default_factory=list)
+    mcp: dict = field(default_factory=dict)         # {"writes": [tool names], "reads": [tool names]}: overrides for the write heuristic
 
-    def environ(self, base_url, replay):
+    def environ(self, base_url, replay, mcp_control=None):
         env = {k: v for k, v in os.environ.items() if k not in STRIP_ENV}
         # "{proxy_url}" in a configured value: for agents that read their base URL from their own variable (e.g. OPENCODE_BASE_URL)
         env.update({k: v.replace("{proxy_url}", base_url) for k, v in self.env.items()})
         env.update(OPENAI_BASE_URL=base_url + "/v1", ANTHROPIC_BASE_URL=base_url)
+        if mcp_control:
+            env[MCP_ENV] = mcp_control
         if replay:      # replay needs no real key (nothing leaves the machine), but SDKs refuse to start without one
             env.update(OPENAI_API_KEY="sk-crosstrace-replay", ANTHROPIC_API_KEY="sk-ant-crosstrace-replay")
         return env
@@ -58,12 +66,12 @@ def _kill(proc):
         pass
 
 
-def run_agent(spec, base_url, replay, watch=None, poll_s=0.05, timeout_s=None):
+def run_agent(spec, base_url, replay, watch=None, poll_s=0.05, timeout_s=None, mcp_control=None):
     """Run the agent once. watch(): returns a reason string to stop it early (verdict already decided), else None."""
     timeout_s = timeout_s or spec.timeout_s
     with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as err:
         t0 = time.monotonic()
-        proc = subprocess.Popen(spec.command, cwd=spec.cwd, env=spec.environ(base_url, replay), stdout=out, stderr=err, text=True,
+        proc = subprocess.Popen(spec.command, cwd=spec.cwd, env=spec.environ(base_url, replay, mcp_control), stdout=out, stderr=err, text=True,
                                 start_new_session=(sys.platform != "win32"))
         timed_out, stopped = False, None
         while proc.poll() is None:
@@ -84,10 +92,54 @@ def run_agent(spec, base_url, replay, watch=None, poll_s=0.05, timeout_s=None):
         return RunOutcome(proc.returncode, out.read(), err.read(), secs, timed_out, stopped)
 
 
+class McpRun:
+    """The control file and logs for the MCP wrapper of one agent run (the wrapper finds them through CROSSTRACE_MCP).
+
+    Replay always gets one, even when nothing was recorded: a wrapper in replay mode never starts the real MCP server, so a replay
+    cannot cause side effects."""
+
+    def __init__(self, spec, mode, calls=None, fault=None):
+        self.dir = tempfile.mkdtemp(prefix="crosstrace-mcp-")
+        self.path = os.path.join(self.dir, "control.json")
+        self.ledger_path = os.path.join(self.dir, "ledger.jsonl")
+        self.record_path = os.path.join(self.dir, "record.jsonl")
+        control = {"mode": mode, "record_path": self.record_path, "ledger": self.ledger_path, "calls": calls or [], "fault": fault,
+                   "writes": list((spec.mcp or {}).get("writes", [])), "reads": list((spec.mcp or {}).get("reads", []))}
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(control, f)
+
+    @staticmethod
+    def _read(path):
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    def ledger(self):
+        return self._read(self.ledger_path)
+
+    def recorded(self):
+        return self._read(self.record_path)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def _mcp_calls(recording):
+    """The recorded MCP calls of a recording, or None when its agent used no wrapped MCP server."""
+    return (recording.meta.get("mcp") or {}).get("calls")
+
+
 def record(spec, path=None):
     """One healthy run against the real providers (or spec.upstreams), recorded. Fails loudly if the agent fails."""
-    with ProxyThread(mode="record", upstreams=spec.upstreams, masks=spec.masks) as p:
-        o = run_agent(spec, p.base_url, replay=False)
+    with McpRun(spec, "record") as m, ProxyThread(mode="record", upstreams=spec.upstreams, masks=spec.masks) as p:
+        o = run_agent(spec, p.base_url, replay=False, mcp_control=m.path)
+        mcp = m.recorded()
+    if mcp:
+        p.recording.meta["mcp"] = {"calls": mcp}
     if o.timed_out or o.exit_code != 0:
         raise RuntimeError(f"healthy run failed (exit {o.exit_code}, timed out {o.timed_out}): {o.stderr[-500:]}")
     if not p.recording.exchanges:
@@ -99,9 +151,10 @@ def record(spec, path=None):
 
 
 def replay(spec, recording):
-    """One replay with no fault: (outcome, proxy) for inspection."""
-    with ProxyThread(mode="replay", recording=recording, masks=spec.masks) as p:
-        o = run_agent(spec, p.base_url, replay=True)
+    """One replay with no fault: (outcome, proxy) for inspection. The MCP ledger of the run is on p.mcp_ledger."""
+    with ProxyThread(mode="replay", recording=recording, masks=spec.masks) as p, McpRun(spec, "replay", _mcp_calls(recording)) as m:
+        o = run_agent(spec, p.base_url, replay=True, mcp_control=m.path)
+        p.mcp_ledger = m.ledger()
     return o, p
 
 
@@ -145,6 +198,15 @@ def stability(spec, recording, runs=2):
             where = "; ".join(f"{p_}: recorded {x} vs now {y}" for p_, x, y in diffs) or "body differs"
             problems.append(f"replay {i + 1}: model call {pos} matched no recording ({where}); if this value changes on every run, "
                             f"add a regex for it to [replay] masks")
+        rec_calls = _mcp_calls(recording)
+        if rec_calls is not None:
+            ledger = p.mcp_ledger
+            lost = [e for e in ledger if e.get("unrecorded")]
+            if lost:
+                problems.append(f"replay {i + 1}: tool call {lost[0]['tool']} {lost[0]['args_key'][:60]} matched no recording; if a value in "
+                                f"its arguments changes on every run, the replay cannot be stable")
+            elif len(ledger) != len(tool_calls(rec_calls)):
+                problems.append(f"replay {i + 1}: {len(ledger)} tool call(s) now, {len(tool_calls(rec_calls))} recorded")
         if not p.session.complete and not misses:
             problems.append(f"replay {i + 1}: only {len(p.session.used)} of {len(recording.exchanges)} recorded exchanges were requested")
         if o.stdout.strip() != recording.meta.get("stdout", "").strip():
@@ -163,16 +225,36 @@ def trial(spec, recording, fault, at, heal_after=1, path=0, timeout_s=None, **pa
     plan = FaultPlan(f, at=at, heal_after=heal_after)
     if not f.applies(recording.exchanges[at]):
         return TrialResult(path=path, fault=f.name, at=at, verdict="N/A", detail=f"{f.name} does not apply to exchange {at}")
-    with ProxyThread(mode="replay", recording=recording, faults=plan, masks=spec.masks) as p:
+    calls = _mcp_calls(recording)
+    with ProxyThread(mode="replay", recording=recording, faults=plan, masks=spec.masks) as p, McpRun(spec, "replay", calls) as m:
         def watch():
-            if early_silent(at, p.requests):
+            # With MCP tool calls the run must finish: stopping at the first sign of SILENT could cut off the writes that come after it
+            if calls is None and early_silent(at, p.requests):
                 return "silent"
             if attempts_at(at, p.requests) > STORM_LIMIT:
                 return "storm"
             return None
-        o = run_agent(spec, p.base_url, replay=True, watch=watch, timeout_s=timeout_s)
-    return classify(f.name, at, recording, list(p.requests), o.exit_code, o.stdout, o.timed_out, recording.meta.get("stdout", ""),
-                    path=path, seconds=o.seconds)
+        o = run_agent(spec, p.base_url, replay=True, watch=watch, timeout_s=timeout_s, mcp_control=m.path)
+        ledger = m.ledger()
+    res = classify(f.name, at, recording, list(p.requests), o.exit_code, o.stdout, o.timed_out, recording.meta.get("stdout", ""),
+                   path=path, seconds=o.seconds)
+    if calls is not None:                   # a write that ran again while the agent recovered is a problem even when the answer is right
+        res = write_check(res, calls, ledger, (spec.mcp or {}).get("writes", []), (spec.mcp or {}).get("reads", []))
+    return res
+
+
+def tool_trial(spec, recording, fault, at, path=0, timeout_s=None):
+    """Lose the response to the `at`-th MCP tool call (the tool ran, the agent never hears) and see what the agent does next."""
+    f = make_fault(fault) if isinstance(fault, str) else fault
+    calls = _mcp_calls(recording)
+    if not calls or not 0 <= at < len(tool_calls(calls)):
+        return TrialResult(path=path, fault=f.name, at=at, verdict="N/A", detail=f"{f.name} does not apply: no MCP tool call {at} recorded")
+    control_fault = {"name": f.name, "at": at, "how": f.p["how"], "persistent": f.p["persistent"]}
+    with ProxyThread(mode="replay", recording=recording, masks=spec.masks) as p, McpRun(spec, "replay", calls, control_fault) as m:
+        o = run_agent(spec, p.base_url, replay=True, timeout_s=timeout_s, mcp_control=m.path)
+        ledger = m.ledger()
+    return classify_tool(f.name, at, calls, ledger, o.exit_code, o.stdout, o.timed_out, recording.meta.get("stdout", ""), path=path,
+                         seconds=o.seconds, writes=(spec.mcp or {}).get("writes", []), reads=(spec.mcp or {}).get("reads", []))
 
 
 def effective_params(name, params, timeout_s):
@@ -198,7 +280,10 @@ def plan_trials(recordings, faults, max_exchanges=0, seed=0, only_path=None, onl
             continue
         for fs in faults:
             proto = make_fault(fs.name, **fs.params)
-            ks = [k for k, ex in enumerate(rec.exchanges) if proto.applies(ex)]
+            if proto.tool_fault:
+                ks = list(range(len(tool_calls(_mcp_calls(rec) or []))))
+            else:
+                ks = [k for k, ex in enumerate(rec.exchanges) if proto.applies(ex)]
             if only_at is not None:
                 ks = [k for k in ks if k == only_at]
             if max_exchanges and len(ks) > max_exchanges:
@@ -217,7 +302,10 @@ def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None)
     def one(item):
         pi, fs, k = item
         f = make_fault(fs.name, **effective_params(fs.name, fs.params, timeout_s))
-        r = trial(spec_for(pi), recordings[pi], f, k, heal_after=fs.heal, path=pi, timeout_s=timeout_s)
+        if f.tool_fault:
+            r = tool_trial(spec_for(pi), recordings[pi], f, k, path=pi, timeout_s=timeout_s)
+        else:
+            r = trial(spec_for(pi), recordings[pi], f, k, heal_after=fs.heal, path=pi, timeout_s=timeout_s)
         r.fault = fs.label
         if progress:
             progress(r)

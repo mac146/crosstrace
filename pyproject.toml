@@ -13,6 +13,7 @@ dependencies = ["httpx>=0.27"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
+mcp = ["mcp>=2", "openai"]          # only for the MCP example agent and its end-to-end tests
 research = ["opentelemetry-sdk==1.45.2"]
 
 [project.scripts]

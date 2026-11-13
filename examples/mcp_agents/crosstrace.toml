@@ -1,0 +1,17 @@
+# An agent that calls a model and then an MCP tool that moves money. The recording next to it was made against the mock provider
+# (mockservices/sse_server.py) and a real run of server.py, so `crosstrace test` works here with no API key.
+#   crosstrace test                       -> the naive agent: when a refund's response is lost it retries and refunds twice (DUPLICATE)
+#   change --mode naive to --mode careful -> it checks first and stops: no duplicate
+#
+# The agent launches its MCP server as `crosstrace mcp-wrap -- python server.py` (see agent.py). That is the one change an MCP agent needs.
+# Needs: pip install mcp openai
+
+[agent]
+command = ["python", "agent.py", "--mode", "naive"]
+timeout_s = 60
+
+[test]
+trial_timeout_s = 30
+
+[modes.pr]
+faults = ["lost_response"]
