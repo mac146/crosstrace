@@ -77,6 +77,10 @@ def advice(verdict, fault, requests=None):
     if verdict == "WRONG_RETRY":
         return ["do not retry 400/401/403/404/422: they fail the same way every time; retry only connection errors, timeouts, 408, 409, "
                 "429 and 5xx", "for context-length errors, shrink the context (summarize, drop old turns) instead of resending"]
+    if verdict == "REPROMPTED":
+        return ["re-prompting the model with the error is a valid way to recover; check that nothing ran on the failed reply first",
+                "make sure the re-prompt is bounded: if the model keeps failing, stop with a clear error instead of asking forever",
+                "if the failure is a transport problem (a cut or empty body), retrying the same request is usually cheaper than re-prompting"]
     if verdict == "ENDED_EARLY":
         return ["the agent exited 0 without the failed step: check that the output says the task failed, or exit non-zero"]
     if verdict == "RECOVERED_DIFFERENT":

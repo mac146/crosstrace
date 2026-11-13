@@ -22,7 +22,7 @@ DEFAULT_MODES = {
     "nightly": {"faults": PR_FAULTS + NIGHTLY_EXTRA, "max_exchanges": 0, "stability_runs": 2, "jobs": 4},
 }
 VERDICTS_ALLOWED_IN_ALLOW = {"ENDED_EARLY", "RECOVERED_DIFFERENT", "SILENT", "PARTIAL", "HANG", "RETRY_STORM", "IGNORED_RETRY_AFTER",
-                             "WRONG_RETRY", "DUPLICATE"}
+                             "WRONG_RETRY", "DUPLICATE", "REPROMPTED"}
 
 TEMPLATE = '''# CrossTrace configuration. Docs: crosstrace --help, crosstrace faults
 # Recordings in .crosstrace/recordings/ are meant to be committed (CI replays them without API keys).

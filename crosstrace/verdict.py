@@ -17,10 +17,10 @@ from dataclasses import asdict, dataclass, field
 from crosstrace.proxy.faults import NON_RETRYABLE, json_body, text_slot, parse_event
 
 OK = {"RECOVERED", "SURFACED"}
-REVIEW = {"RECOVERED_DIFFERENT", "ENDED_EARLY"}
+REVIEW = {"RECOVERED_DIFFERENT", "ENDED_EARLY", "REPROMPTED"}
 PROBLEM = {"SILENT", "PARTIAL", "HANG", "RETRY_STORM", "IGNORED_RETRY_AFTER", "WRONG_RETRY", "DUPLICATE"}
 SETUP = {"REPLAY_UNSTABLE", "NOT_REACHED", "N/A"}
-ORDER = ["DUPLICATE", "HANG", "WRONG_RETRY", "RETRY_STORM", "IGNORED_RETRY_AFTER", "SILENT", "PARTIAL", "ENDED_EARLY", "RECOVERED_DIFFERENT",
+ORDER = ["DUPLICATE", "HANG", "WRONG_RETRY", "RETRY_STORM", "IGNORED_RETRY_AFTER", "SILENT", "PARTIAL", "ENDED_EARLY", "REPROMPTED", "RECOVERED_DIFFERENT",
          "SURFACED", "RECOVERED", "NOT_REACHED", "REPLAY_UNSTABLE", "N/A"]
 STORM_LIMIT = 6            # attempts at one exchange above which retries are a storm
 LONG_RETRY_AFTER_S = 120   # longer server-directed waits are not judged by spacing (HANG covers them)
@@ -105,6 +105,49 @@ def _new_tool_calls(faulted_request, next_request):
     return _tool_calls(next_request)[len(before):] if next_request else []
 
 
+def _conversation(body):
+    """The message list of a model request (chat completions and Anthropic: messages; Responses: input), or None."""
+    if isinstance(body, dict):
+        for key in ("messages", "input"):
+            if isinstance(body.get(key), list):
+                return body[key]
+    return None
+
+
+def _runs_something(message):
+    """True when a message carries a tool call or a tool result: the agent did something with the failed reply, it did not just talk about it."""
+    if not isinstance(message, dict):
+        return True
+    if message.get("role") == "tool" or message.get("tool_calls") or message.get("type") in ("function_call", "function_call_output"):
+        return True
+    content = message.get("content")
+    return isinstance(content, list) and any(isinstance(b, dict) and b.get("type") in ("tool_use", "tool_result") for b in content)
+
+
+def _message_text(message):
+    content = message.get("content")
+    if isinstance(content, list):
+        content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+    return str(content or "").strip()
+
+
+def _reprompt(faulted_request, next_request):
+    """The text the agent added to tell the model its last reply failed, or None.
+
+    A re-prompt is the faulted request unchanged, then at most the failed reply and ONE new user message, and nothing that runs a tool.
+    CrossTrace cannot tell a message that reports the failure from one that reports what the agent did with it (a text-protocol agent may
+    send its own observations as user messages), so the verdict is a review: the text is shown for a person to judge."""
+    before, after = _conversation(faulted_request), _conversation(next_request)
+    if before is None or after is None or after[:len(before)] != before:
+        return None
+    added = after[len(before):]
+    if not 1 <= len(added) <= 2 or any(_runs_something(m) for m in added):
+        return None
+    if added[-1].get("role") != "user" or (len(added) == 2 and added[0].get("role") != "assistant"):
+        return None
+    return _message_text(added[-1])
+
+
 def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_stdout, path=0, seconds=0.0):
     ex = recording.exchanges[at]
     model = [r for r in requests if r.get("provider")]
@@ -164,7 +207,15 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
         nxt = after[other_pos]
         res.verdict = "SILENT"
         cut = _new_tool_calls(ex.request, nxt.get("request")) if nxt.get("idx") is None else []
-        if cut:                        # the clearest harm: a tool ran on arguments from a response that never finished
+        # only when a reply arrived (HTTP 200) and was defective: after an error status there is no reply to tell the model about, so an agent
+        # that carries on is inventing context, whatever message it adds
+        said = _reprompt(ex.request, nxt.get("request")) if nxt.get("idx") is None and not cut and first.get("status") == 200 else None
+        if said:                       # it told the model about the failure instead of retrying the same call
+            res.verdict = "REPROMPTED"
+            shown = said if len(said) <= 160 else said[:157] + "..."
+            res.detail = (f"told the model the reply failed instead of retrying exchange {at}: \"{shown}\" ({tries}); "
+                          f"check that nothing ran on the bad reply and that this stops if the model keeps failing")
+        elif cut:                        # the clearest harm: a tool ran on arguments from a response that never finished
             name, args = cut[0]
             res.detail = f"ran tool {name} with arguments {args} from a response that never finished, instead of retrying exchange {at} ({tries})"
         elif nxt.get("idx") is None:   # its next request is not in the recording: its context changed (partial or missing data)

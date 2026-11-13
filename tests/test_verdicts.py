@@ -112,6 +112,43 @@ def _ex(i, stream=False):
                     headers=[], stream=stream, body="{}")
 
 
+def test_telling_the_model_about_the_failure_is_a_review_not_silent():
+    """Found on a real agent loop: after a cut or an empty reply it sends the model an error message. That is handling the failure, but
+    CrossTrace cannot know it did not also act on the bad reply, so it is a review with the text shown."""
+    base = [{"role": "system", "content": "be brief"}, {"role": "user", "content": "task"}]
+    recd = Recording(exchanges=[Exchange(idx=0, path="/v1/chat/completions", provider="openai", key="k0", state_key="s0",
+                                         request={"messages": base}, status=200, headers=[], stream=False, body="{}")])
+    p = {"provider": "openai"}
+
+    def verdict(added, prefix=base, exit_code=1, status=200):
+        reqs = [{**p, "idx": 0, "how": "in_order", "t": 0, "fault": "length_cut", "attempt": 1, "status": status},
+                {**p, "idx": None, "how": "miss", "t": 1, "request": {"messages": prefix + added}}]
+        return classify("length_cut", 0, recd, reqs, exit_code, "", False, "ok")
+
+    told = [{"role": "assistant", "content": '{"reasoning": "cut'}, {"role": "user", "content": "That reply was cut off. Please continue."}]
+    r = verdict(told)
+    assert r.verdict == "REPROMPTED" and "cut off" in r.detail and "check that nothing ran" in r.detail
+    assert verdict([{"role": "user", "content": "That reply was blank. Please answer again."}]).verdict == "REPROMPTED"  # empty reply dropped
+    # blocks (Anthropic style) work too
+    assert verdict([{"role": "assistant", "content": [{"type": "text", "text": "cut"}]},
+                    {"role": "user", "content": [{"type": "text", "text": "that reply was cut off, continue"}]}]).verdict == "REPROMPTED"
+    # an action ran on the bad reply: SILENT, as before
+    assert verdict([told[0], {"role": "tool", "tool_call_id": "c1", "content": "done"}]).verdict == "SILENT"
+    assert verdict([{"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "function": {"name": "x", "arguments": "{}"}}]},
+                    {"role": "user", "content": "go on"}]).verdict == "SILENT"
+    assert verdict([told[0], {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]}]).verdict == "SILENT"
+    # no reply arrived (an error status): an agent that carries on with an added message is making up context, not reporting a failure
+    assert verdict([{"role": "user", "content": "The order system did not respond. Answer anyway."}], status=500).verdict == "SILENT"
+    assert verdict([{"role": "user", "content": "The order system did not respond. Answer anyway."}], status=None).verdict == "SILENT"
+    # a changed conversation, or more than one new message, is not a re-prompt
+    assert verdict(told, prefix=[{"role": "system", "content": "be brief"}, {"role": "user", "content": "a different task"}]).verdict == "SILENT"
+    assert verdict(told + [{"role": "assistant", "content": "x"}, {"role": "user", "content": "y"}]).verdict == "SILENT"
+    assert verdict([{"role": "assistant", "content": "cut"}]).verdict == "SILENT"                       # no message addressed to the model
+    # review, not a problem: it does not fail the build
+    from crosstrace.verdict import PROBLEM, REVIEW
+    assert "REPROMPTED" in REVIEW and "REPROMPTED" not in PROBLEM
+
+
 def test_starting_over_is_a_recovery_but_a_changed_context_is_not():
     """An agent that recovers a failed model call by redoing its earlier steps is not SILENT: every request it sends is a recorded one."""
     recd = Recording(exchanges=[_ex(0), _ex(1), _ex(2)])
