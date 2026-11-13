@@ -87,9 +87,9 @@ def test_recovering_from_a_model_failure_by_starting_over_repeats_the_write(demo
     """Counting writes after recovery: a model fault, not a tool fault. The agent recovers and prints the right answer."""
     spec, rec, ledger = demo
     r = runner.trial(spec("restart"), rec, "server_error", 1, timeout_s=40)
-    # the agent starts over instead of retrying the failed call, so the model-lane verdict underneath is SILENT; the write check wins
+    # the agent starts over instead of retrying the failed call: the model-lane verdict underneath is RECOVERED, and the write check wins
     assert r.verdict == "DUPLICATE" and "ran 2 time(s), 1 in the healthy run" in r.detail, (r.verdict, r.detail)
-    assert r.exit_code == 0
+    assert "recovered and finished" in r.detail and r.exit_code == 0
     # the same fault against an agent that does not start over is clean
     assert runner.trial(spec("careful"), rec, "server_error", 1, timeout_s=40).verdict == "RECOVERED"
 

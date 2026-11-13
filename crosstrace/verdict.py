@@ -137,6 +137,13 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
     other_pos = next((k for k, r in enumerate(after) if r.get("idx") != at), None)
     via = " via fallback" if any(r.get("how") == "fallback" for r in attempts) else ""
     tries = f"{res.attempts - 1} retr{'y' if res.attempts == 2 else 'ies'}{via}" if res.attempts > 1 else "no retry"
+    # An agent that starts over: before it retries the failed call it re-sends earlier exchanges, each one an exact repeat of a recorded
+    # request. Nothing is missing from its context, so this is a recovery (the work done twice is for the write check to judge).
+    if success_pos is not None and other_pos is not None and other_pos < success_pos:
+        between = [r for r in after[:success_pos] if r.get("idx") != at]
+        if all(r.get("how") == "repeat" and r.get("idx") is not None and r["idx"] < at for r in between):
+            tries += f", after starting over from exchange {min(r['idx'] for r in between)}"
+            other_pos = None
 
     if hang:
         res.verdict = "HANG"

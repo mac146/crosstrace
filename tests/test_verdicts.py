@@ -112,6 +112,29 @@ def _ex(i, stream=False):
                     headers=[], stream=stream, body="{}")
 
 
+def test_starting_over_is_a_recovery_but_a_changed_context_is_not():
+    """An agent that recovers a failed model call by redoing its earlier steps is not SILENT: every request it sends is a recorded one."""
+    recd = Recording(exchanges=[_ex(0), _ex(1), _ex(2)])
+    p = {"provider": "openai"}
+    seq = [{**p, "idx": 0, "how": "in_order", "t": 0}, {**p, "idx": 1, "how": "in_order", "t": 1},
+           {**p, "idx": 2, "how": "in_order", "t": 2, "fault": "server_error", "attempt": 1}]
+    restart = seq + [{**p, "idx": 0, "how": "repeat", "t": 3}, {**p, "idx": 1, "how": "repeat", "t": 4},
+                     {**p, "idx": 2, "how": "repeat", "t": 5, "attempt": 2, "healed": "server_error"}]
+    r = classify("server_error", 2, recd, restart, 0, "done", False, "done")
+    assert r.verdict == "RECOVERED" and "after starting over from exchange 0" in r.detail
+    assert classify("server_error", 2, recd, restart, 0, "different", False, "done").verdict == "RECOVERED_DIFFERENT"
+    assert classify("server_error", 2, recd, restart, 1, "", False, "done").verdict == "SURFACED"
+    # it starts over but never gets the failed call back: it moved on
+    assert classify("server_error", 2, recd, seq + restart[3:5], 0, "done", False, "done").verdict == "SILENT"
+    # a request that matches nothing in the recording means its context changed: SILENT even if the failed call is retried later
+    changed = seq + [{**p, "idx": None, "how": "miss", "t": 3}, {**p, "idx": 2, "how": "repeat", "t": 4, "attempt": 2}]
+    assert classify("server_error", 2, recd, changed, 0, "done", False, "done").verdict == "SILENT"
+    # a plain retry is still just a retry
+    plain = seq + [{**p, "idx": 2, "how": "repeat", "t": 3, "attempt": 2}]
+    r = classify("server_error", 2, recd, plain, 0, "done", False, "done")
+    assert r.verdict == "RECOVERED" and "starting over" not in r.detail
+
+
 def test_cut_non_streamed_answer_is_partial_when_printed_and_ended_early_when_not():
     """Found on a real non-streaming client: a length_cut answer printed as complete was reported as ENDED_EARLY because only streamed
     answers could be measured."""
