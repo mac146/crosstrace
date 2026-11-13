@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from crosstrace import config as C, runner
-from crosstrace.mcp.ledger import args_key, excess_writes, is_write, tool_calls
+from crosstrace.mcp.ledger import args_key, effective_lists, excess_writes, is_write, tool_calls, tool_hints
 from crosstrace.mcp.verdict import classify_tool, write_check
 from crosstrace.mcp.wrap import ENV, Replayer
 from crosstrace.proxy.faults import CATALOG, TOOL_FAULTS, make_fault
@@ -47,6 +47,7 @@ def read_ledger(path):
     ("refund_status", False), ("get_order", False), ("list_files", False), ("searchDocs", False), ("check_status", False),
     ("browser_snapshot", False), ("frobnicate", False), ("", False),
     # found on the real Playwright MCP server: a key press (Enter) submits a form and a script can do anything
+    ("upsert_record", True), ("replace_file", True), ("deploy_service", True), ("revoke_access", True),
     ("browser_press_key", True), ("browser_evaluate", True), ("browser_run_code_unsafe", True), ("browser_drag", True), ("browser_drop", True),
 ])
 def test_write_heuristic(name, write):
@@ -74,6 +75,48 @@ def test_the_real_browser_server_tool_names_are_classified_as_documented():
 def test_config_lists_override_the_heuristic():
     assert is_write("run_report", writes=["run_report"]) is True
     assert is_write("send_digest_preview", reads=["send_digest_preview"]) is False
+
+
+def tools_list(**hints):
+    """A recorded tools/list whose tools carry the given annotations: tools_list(upsert={"idempotentHint": True})."""
+    return {"method": "tools/list", "params": None, "error": None,
+            "result": {"tools": [{"name": n, "annotations": a} for n, a in hints.items()]}}
+
+
+def test_the_servers_own_hints_are_used_but_only_the_two_that_can_be_trusted():
+    # shaped like the real Playwright server: readOnlyHint is accurate, destructiveHint is true for every tool, navigate included
+    calls = [tools_list(browser_snapshot={"readOnlyHint": True, "destructiveHint": False},
+                        browser_navigate={"readOnlyHint": False, "destructiveHint": True},
+                        upsert_record={"idempotentHint": True, "destructiveHint": True}, send_report={"readOnlyHint": True})]
+    read_only, idempotent = tool_hints(calls)
+    assert read_only == {"browser_snapshot", "send_report"} and idempotent == {"upsert_record"}
+    writes, reads, idem = effective_lists({}, calls)
+    assert writes == [] and "send_report" in reads and idem == ["upsert_record"]
+    assert not is_write("browser_navigate", writes, reads)                  # destructiveHint: true must not turn a navigation into a write
+    assert not is_write("send_report", writes, reads) and is_write("send_report")        # a misleading name, corrected by the server's claim
+
+
+def test_config_beats_the_servers_claims():
+    calls = [tools_list(send_report={"readOnlyHint": True}, upsert_record={"idempotentHint": True})]
+    writes, reads, idem = effective_lists({"writes": ["send_report", "upsert_record"], "reads": ["fetch_all"]}, calls)
+    assert writes == ["send_report", "upsert_record"] and "send_report" not in reads and "fetch_all" in reads
+    assert idem == []                                                       # listed under writes: always counted
+    assert effective_lists(None, []) == ([], [], [])
+
+
+def test_running_an_idempotent_tool_again_is_not_a_repeat_but_any_other_write_is():
+    calls = [tools_list(upsert_record={"idempotentHint": True}),
+             {"method": "tools/call", "params": {"name": "upsert_record", "arguments": {"id": 1}}, "result": {}, "error": None},
+             {"method": "tools/call", "params": {"name": "refund", "arguments": {"id": 1}}, "result": {}, "error": None}]
+
+    def run(tool, n):
+        return [{"seq": i, "tool": tool, "args_key": args_key({"id": 1}), "write": True, "faulted": False, "attempt": 1, "unrecorded": False}
+                for i in range(n)]
+
+    writes, reads, idem = effective_lists({}, calls)
+    assert excess_writes(calls, run("upsert_record", 3), writes, reads, idem) == []
+    assert excess_writes(calls, run("upsert_record", 3), writes, reads) == [("upsert_record", args_key({"id": 1}), 1, 3)]   # no hint: counted
+    assert excess_writes(calls, run("refund", 2), writes, reads, idem) == [("refund", args_key({"id": 1}), 1, 2)]
 
 
 def test_args_key_ignores_key_order():

@@ -12,7 +12,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 
-from crosstrace.mcp.ledger import tool_calls
+from crosstrace.mcp.ledger import effective_lists, tool_calls
 from crosstrace.mcp.verdict import classify_tool, write_check
 from crosstrace.mcp.wrap import ENV as MCP_ENV
 from crosstrace.proxy import FaultPlan, ProxyThread, make_fault
@@ -103,8 +103,9 @@ class McpRun:
         self.path = os.path.join(self.dir, "control.json")
         self.ledger_path = os.path.join(self.dir, "ledger.jsonl")
         self.record_path = os.path.join(self.dir, "record.jsonl")
+        writes, reads, _ = effective_lists(spec.mcp, calls)          # the server's own hints count: a read-only tool is not a write
         control = {"mode": mode, "record_path": self.record_path, "ledger": self.ledger_path, "calls": calls or [], "fault": fault,
-                   "writes": list((spec.mcp or {}).get("writes", [])), "reads": list((spec.mcp or {}).get("reads", []))}
+                   "writes": writes, "reads": reads}
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(control, f)
 
@@ -239,7 +240,7 @@ def trial(spec, recording, fault, at, heal_after=1, path=0, timeout_s=None, **pa
     res = classify(f.name, at, recording, list(p.requests), o.exit_code, o.stdout, o.timed_out, recording.meta.get("stdout", ""),
                    path=path, seconds=o.seconds)
     if calls is not None:                   # a write that ran again while the agent recovered is a problem even when the answer is right
-        res = write_check(res, calls, ledger, (spec.mcp or {}).get("writes", []), (spec.mcp or {}).get("reads", []))
+        res = write_check(res, calls, ledger, *effective_lists(spec.mcp, calls))
     return res
 
 
@@ -253,8 +254,9 @@ def tool_trial(spec, recording, fault, at, path=0, timeout_s=None):
     with ProxyThread(mode="replay", recording=recording, masks=spec.masks) as p, McpRun(spec, "replay", calls, control_fault) as m:
         o = run_agent(spec, p.base_url, replay=True, timeout_s=timeout_s, mcp_control=m.path)
         ledger = m.ledger()
+    writes, reads, idempotent = effective_lists(spec.mcp, calls)
     return classify_tool(f.name, at, calls, ledger, o.exit_code, o.stdout, o.timed_out, recording.meta.get("stdout", ""), path=path,
-                         seconds=o.seconds, writes=(spec.mcp or {}).get("writes", []), reads=(spec.mcp or {}).get("reads", []))
+                         seconds=o.seconds, writes=writes, reads=reads, idempotent=idempotent)
 
 
 def effective_params(name, params, timeout_s):

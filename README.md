@@ -147,7 +147,8 @@ CrossTrace tests this for MCP servers that run over stdio. One change in your ag
 - **Write counting:** every call to a tool that changes something is logged. A write that ran more often than in the healthy run is a
   **`DUPLICATE`**, in **every** trial, not only this one. A run that recovers and prints the right answer can still have written twice, so
   recovering is not enough to pass. The same check catches an agent that recovers from a *model* failure by starting the task over.
-- **Which tools are writes:** guessed from the name (`send`, `submit`, `pay`, `delete`, `click`, ...; `get`, `list`, `status` are reads).
+- **Which tools are writes:** your `[mcp]` lists first, then what the server says about itself (a tool it declares `readOnlyHint` is a read),
+  then a guess from the name (`send`, `submit`, `pay`, `delete`, `click`, ...; `get`, `list`, `status` are reads).
   List the ones it gets wrong in `[mcp] writes` / `reads`. For browser tools, click, type, fill_form, file_upload, press_key (Enter submits a
   form), evaluate and run_code are writes; navigate, snapshot and screenshot are reads. `select_option` and `handle_dialog` are ambiguous and
   count as reads: list them under `writes` if a choice or a confirmation can change something.
@@ -168,7 +169,9 @@ scripted, so it tests the tool-call handling, not how well a model drives a brow
   environment, so pass it on (the example does).
 - Replay cannot answer a state check. An agent that asks a read tool "did it go through?" before retrying gets the recorded answer, or
   "not recorded", so it shows as stopping with an error, not as recovering safely.
-- A retry with the same arguments counts as a repeat even if the server would have ignored it (an idempotency key it remembers).
+- A retry counts as a repeat unless the server declares the tool idempotent (`idempotentHint`). An idempotency key you pass in the
+  arguments is not recognised: the server may ignore the repeat and CrossTrace cannot tell. The official Playwright server declares
+  `readOnlyHint` for 6 of its 25 tools and no `idempotentHint`.
 - The repeat is counted in replay, from a log of the tool calls. CrossTrace does not run a second real click to show the site receiving two
   orders; it counts the second call the agent made.
 - The lost response is a transport error on a live session, not a dead server process.

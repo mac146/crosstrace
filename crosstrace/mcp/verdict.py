@@ -13,9 +13,9 @@ def _show(tool, key, limit=60):
     return f"{tool}({args})"
 
 
-def write_check(res, calls, ledger, writes=(), reads=()):
+def write_check(res, calls, ledger, writes=(), reads=(), idempotent=()):
     """Turn any verdict into DUPLICATE when a write ran more often than in the healthy run. Returns res."""
-    extra = excess_writes(calls, ledger, writes, reads)
+    extra = excess_writes(calls, ledger, writes, reads, idempotent)
     if not extra:
         return res
     tool, key, expected, got = max(extra, key=lambda e: e[3] - e[2])
@@ -28,7 +28,7 @@ def write_check(res, calls, ledger, writes=(), reads=()):
     return res
 
 
-def classify_tool(fault, at, calls, ledger, exit_code, stdout, hang, healthy_stdout, path=0, seconds=0.0, writes=(), reads=()):
+def classify_tool(fault, at, calls, ledger, exit_code, stdout, hang, healthy_stdout, path=0, seconds=0.0, writes=(), reads=(), idempotent=()):
     """The outcome of losing the response to tool call `at` (the tool ran; the agent never heard)."""
     res = TrialResult(path=path, fault=fault, at=at, verdict="N/A", exit_code=exit_code, seconds=round(seconds, 2), stdout=stdout[-2000:])
     lost = next((e for e in ledger if e.get("faulted")), None)
@@ -49,4 +49,4 @@ def classify_tool(fault, at, calls, ledger, exit_code, stdout, hang, healthy_std
     else:
         res.verdict = "ENDED_EARLY"
         res.detail = f"carried on after the response to {name} was lost, without retrying it; check the output says whether it worked"
-    return write_check(res, calls, ledger, writes, reads)
+    return write_check(res, calls, ledger, writes, reads, idempotent)

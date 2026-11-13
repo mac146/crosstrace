@@ -11,7 +11,9 @@ WRITE_WORDS = {"create", "send", "submit", "pay", "charge", "refund", "delete", 
                "order", "transfer", "cancel", "publish", "upload", "click", "fill", "type", "set", "add", "save", "approve", "reject",
                "execute", "commit", "push", "merge", "invite", "assign", "move", "rename", "patch", "put", "reply", "email", "purchase",
                # browser tools: a key press can submit a form, a script can do anything, a drag or drop can trigger an action
-               "press", "evaluate", "drag", "drop", "unsafe"}
+               "press", "evaluate", "drag", "drop", "unsafe",
+               # data and deployment verbs that are never reads
+               "upsert", "replace", "overwrite", "truncate", "grant", "revoke", "deploy", "kill"}
 READ_WORDS = {"get", "list", "read", "search", "find", "lookup", "fetch", "status", "check", "view", "describe", "query", "show", "count",
               "info", "details", "history", "snapshot", "screenshot", "inspect", "preview", "validate", "verify"}
 
@@ -50,8 +52,39 @@ def call_key(call):
     return p.get("name"), args_key(p.get("arguments"))
 
 
-def excess_writes(calls, ledger, writes=(), reads=()):
-    """[(tool, args_key, expected, executed)] for every write that ran more often than in the healthy run (expected may be 0)."""
-    expected = Counter(k for k in map(call_key, tool_calls(calls)) if is_write(k[0], writes, reads))
-    executed = Counter((e["tool"], e["args_key"]) for e in ledger if e.get("write"))
+def tool_hints(calls):
+    """What the server itself says about its tools, from the recorded tools/list: ({read-only tools}, {idempotent tools}).
+
+    Only the two hints that can be trusted are used. readOnlyHint true is an explicit claim that the tool changes nothing, and
+    idempotentHint true that repeating it is harmless. destructiveHint is not used: servers send it as true for every tool, navigate and
+    hover included (the real Playwright server does), so it says nothing about which ones write."""
+    read_only, idempotent = set(), set()
+    for c in calls:
+        if c.get("method") == "tools/list" and isinstance(c.get("result"), dict):
+            for t in c["result"].get("tools") or []:
+                ann = t.get("annotations") or {}
+                if ann.get("readOnlyHint") is True:
+                    read_only.add(t.get("name"))
+                if ann.get("idempotentHint") is True:
+                    idempotent.add(t.get("name"))
+    return read_only, idempotent
+
+
+def effective_lists(config, calls):
+    """(writes, reads, idempotent) for a trial: the [mcp] config first, then what the server declares, then the name guess in is_write.
+
+    A tool the config lists under `writes` is always counted, whatever the server claims."""
+    config = config or {}
+    writes = list(config.get("writes", []))
+    read_only, idempotent = tool_hints(calls or [])
+    reads = list(config.get("reads", [])) + sorted(t for t in read_only if t not in writes)
+    return writes, reads, sorted(t for t in idempotent if t not in writes)
+
+
+def excess_writes(calls, ledger, writes=(), reads=(), idempotent=()):
+    """[(tool, args_key, expected, executed)] for every write that ran more often than in the healthy run (expected may be 0).
+
+    A tool the server declares idempotent is skipped: running it again changes nothing."""
+    expected = Counter(k for k in map(call_key, tool_calls(calls)) if is_write(k[0], writes, reads) and k[0] not in idempotent)
+    executed = Counter((e["tool"], e["args_key"]) for e in ledger if e.get("write") and e["tool"] not in idempotent)
     return [(tool, key, expected.get((tool, key), 0), n) for (tool, key), n in executed.items() if n > expected.get((tool, key), 0)]

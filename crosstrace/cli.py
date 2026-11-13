@@ -20,7 +20,7 @@ import sys
 import time
 
 from crosstrace import __version__, config as C, report as R, runner
-from crosstrace.mcp.ledger import is_write, tool_calls
+from crosstrace.mcp.ledger import effective_lists, is_write, tool_calls
 from crosstrace.proxy.faults import CATALOG, make_fault
 from crosstrace.proxy.recording import Recording
 from crosstrace.verdict import PROBLEM
@@ -96,8 +96,10 @@ def cmd_record(a):
             saved += 1
             st = runner.stability(spec_for(cfg, cmd), rec, runs=2)
             streamed = sum(e.stream for e in rec.exchanges)
-            mcp_calls = tool_calls((rec.meta.get("mcp") or {}).get("calls", []))
-            writes = sum(is_write(c["params"]["name"], cfg.mcp["writes"], cfg.mcp["reads"]) for c in mcp_calls)
+            recorded = (rec.meta.get("mcp") or {}).get("calls", [])
+            mcp_calls = tool_calls(recorded)
+            w, r, _ = effective_lists(cfg.mcp, recorded)
+            writes = sum(is_write(c["params"]["name"], w, r) for c in mcp_calls)
             print(f"  {name}: {len(rec.exchanges)} model calls ({streamed} streamed)"
                   + (f", {len(mcp_calls)} MCP tool calls ({writes} writes)" if mcp_calls else "")
                   + f", {rec.meta['seconds']:.1f} s, replay " + ("stable" if st["stable"] else "NOT stable"))
