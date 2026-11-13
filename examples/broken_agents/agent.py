@@ -32,6 +32,12 @@ MODES = {
     "ignore_retry_after": dict(check_finish=True, sdk_retries=0, timeout=3.0, own_retry="immediate_429", on_error="raise"),
     # retries every error after a pause, including 400 and 401
     "retry_400": dict(check_finish=True, sdk_retries=0, timeout=3.0, own_retry="all_slow", on_error="raise"),
+    # on a stream that ends without a finish_reason, tells the model its reply was cut off and asks again (at most twice, then gives up)
+    "reprompt": dict(check_finish=True, sdk_retries=2, timeout=3.0, own_retry=None, on_error="raise", reprompt=2),
+    # the same with no bound: it asks again for as long as the replies stay cut off
+    "reprompt_forever": dict(check_finish=True, sdk_retries=2, timeout=3.0, own_retry=None, on_error="raise", reprompt="forever"),
+    # on a cut stream starts again with a different prompt: neither a retry of the same request nor a message about the failure
+    "rewrite": dict(check_finish=True, sdk_retries=2, timeout=3.0, own_retry=None, on_error="raise", rewrite=True),
     # puts a random number in its prompt: replay can never match (CrossTrace must report the run as unstable, not pass it)
     "nondeterministic": dict(check_finish=True, sdk_retries=2, timeout=3.0, own_retry="transient_once", on_error="raise"),
 }
@@ -42,12 +48,23 @@ class IncompleteStream(Exception):
 
 
 def stream_text(client, messages, cfg):
-    s = client.chat.completions.create(model="gpt-mock", messages=messages, stream=True)
-    text, finish = "", None
-    for ev in s:
-        if ev.choices:
-            text += ev.choices[0].delta.content or ""
-            finish = ev.choices[0].finish_reason or finish
+    asked = 0
+    while True:
+        s = client.chat.completions.create(model="gpt-mock", messages=messages, stream=True)
+        text, finish = "", None
+        for ev in s:
+            if ev.choices:
+                text += ev.choices[0].delta.content or ""
+                finish = ev.choices[0].finish_reason or finish
+        if finish is not None or not (cfg.get("reprompt") or cfg.get("rewrite")):
+            break
+        asked += 1
+        if cfg.get("reprompt") != "forever" and asked > (cfg.get("reprompt") or 1):
+            raise IncompleteStream("still cut off after asking again")
+        if cfg.get("rewrite"):
+            messages = [{"role": "system", "content": "Start over and be brief."}] + [m for m in messages if m["role"] == "user"]
+        else:
+            messages = messages + [{"role": "assistant", "content": text}, {"role": "user", "content": "Your last reply was cut off. Please repeat it."}]
     if cfg["check_finish"] and finish is None:
         raise IncompleteStream("stream ended without a finish_reason")
     return text

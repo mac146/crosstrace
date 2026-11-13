@@ -235,7 +235,7 @@ def _reprompt(faulted_request, next_request):
     return _message_text(added[-1])
 
 
-def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_stdout, path=0, seconds=0.0):
+def _classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_stdout, path=0, seconds=0.0):
     ex = recording.exchanges[at]
     model = [r for r in requests if r.get("provider")]
     mine = [r for r in model if r.get("idx") == at]
@@ -378,6 +378,60 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
             res.detail += "; the framework printed extra output before the answer"
     else:
         res.verdict, res.detail = "RECOVERED_DIFFERENT", f"recovered ({tries}) but the output differs from the healthy run"
+    return res
+
+
+def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_stdout, path=0, seconds=0.0):
+    """The verdict for one trial. When the agent changed course after the failure, how the run then ENDED settles it (see _apply_outcome)."""
+    res = _classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_stdout, path, seconds)
+    if res.verdict in ("DIVERGED", "REPROMPTED"):
+        res = _apply_outcome(res, requests, exit_code, stdout, hang, healthy_stdout)
+    return res
+
+
+def next_move_verdict(fault, at, recording, requests, healthy_stdout):
+    """The verdict the agent's next move alone gives (before any outcome): what a running trial asks to decide whether it is already certain."""
+    return _classify(fault, at, recording, requests, 0, "", False, healthy_stdout).verdict
+
+
+def _shorten(text, limit=150):
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _apply_outcome(res, requests, exit_code, stdout, hang, healthy_stdout):
+    """Settle a DIVERGED or REPROMPTED result by how the continued run ended.
+
+    The proxy answered the agent's different requests with the next healthy reply of the plan, so the run went on to its real end. What
+    was measured then: whether it stopped asking (the proxy flags an agent that sends more than the cap of different requests), whether
+    it exited, and with what. Nothing here reads the shape of a message."""
+    model = [r for r in requests if r.get("provider")]
+    cont = [r for r in model if r.get("how") == "continued"]
+    unbounded = any(r.get("unbounded") for r in model)
+    if not cont and not unbounded:
+        return res                                 # never continued: it ended first, or continuation was off
+    n = len(cont)
+    res.observed.update(continued=n, unbounded=unbounded)
+    if unbounded or hang:
+        res.verdict = "RETRY_STORM"
+        res.detail = (f"after the failure it kept sending different requests ({n} answered, then it was cut off) and never stopped: "
+                      f"its recovery has no bound")
+        return res
+    after_first = model[model.index(cont[0]):]
+    if any(r.get("how") == "miss" for r in after_first):
+        res.detail += "; the replay could not answer a later request of its, so how it ends is unknown"
+        return res
+    outcome = f"{n} more request{'s' if n != 1 else ''}"
+    if exit_code != 0:
+        res.verdict = "SURFACED"
+        res.detail = f"changed course after the failure and then stopped with an error (exit {exit_code}) after {outcome}: {_shorten(res.detail)}"
+    elif res.verdict == "DIVERGED":
+        same = same_output(stdout, healthy_stdout)
+        res.verdict = "RECOVERED" if same else "RECOVERED_DIFFERENT"
+        res.detail = (f"changed course after the failure and then finished (exit 0) after {outcome}"
+                      + ("" if same else "; the output differs from the healthy run"))
+    else:
+        res.detail += f"; it then finished (exit 0) after {outcome}"
     return res
 
 

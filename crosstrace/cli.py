@@ -175,7 +175,8 @@ def cmd_test(a):
         if r.verdict in PROBLEM:
             log(f"  [{done[0]}/{len(planned)}] {r.fault} at path {r.path} exchange {r.at}: {r.verdict}")
 
-    results = runner.run_planned(lambda pi: spec_for(cfg, replay_command(cfg, recs[pi]), timeout_s), recs, planned, timeout_s, jobs, progress)
+    results = runner.run_planned(lambda pi: spec_for(cfg, replay_command(cfg, recs[pi]), timeout_s), recs, planned, timeout_s, jobs, progress,
+                                 continuation=cfg.continuation and not a.no_continue)
     rep = R.build(cfg, mode, recs, stab, results, time.monotonic() - t0, a.seed, not_applicable)
     print(R.for_terminal(R.render_text(rep)))
     if not a.no_save:
@@ -243,6 +244,7 @@ def build_parser():
     p.add_argument("--seed", type=int, default=0, help="sampling seed for pr mode (default 0: same trials every run)")
     p.add_argument("--json", help="also write the JSON report here")
     p.add_argument("--md", help="append the Markdown report here (e.g. $GITHUB_STEP_SUMMARY)")
+    p.add_argument("--no-continue", action="store_true", help="do not answer requests that match nothing recorded after a fault (a 502 instead)")
     p.add_argument("--no-save", action="store_true", help="do not write .crosstrace/reports/")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(fn=cmd_test)

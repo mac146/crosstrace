@@ -516,6 +516,13 @@ class FaultPlan:
         self.attempts = Counter()
         self.injected = []                    # (exchange idx, attempt number)
 
+    def select_continued(self, entry, ex):
+        """The fault for an answer given to a request that matched nothing. Only a persistent fault (heals never) follows the agent there."""
+        if self.heal_after is not None or self.fault.tool_fault or not self.fault.applies(ex):
+            return None
+        self.injected.append((ex.idx, -1))
+        return self.fault
+
     def select(self, entry, ex):
         if self.at is not None and ex.idx != self.at:
             return None

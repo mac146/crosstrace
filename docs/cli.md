@@ -28,7 +28,7 @@ CrossTrace sets `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` to its local proxy fo
 | `IGNORED_RETRY_AFTER` | retried a 429 before `Retry-After` | problem |
 | `WRONG_RETRY` | retried a non-retryable error (400, 401) | problem |
 | `ENDED_EARLY` | exited 0 without the failed call; check its output says the task failed | review |
-| `DIVERGED` | after a defective reply, sent a request that matches nothing recorded and nothing shows it acted on the reply or carried on as before; the facts are shown | review |
+| `DIVERGED` | after a defective reply, sent a request that matches nothing recorded and nothing shows it acted on the reply or carried on as before; settled by how the continued run ends (`RECOVERED`, `SURFACED` or `RETRY_STORM`), a review only if the replay cannot answer a later request | review |
 | `REPROMPTED` | answered the failure with a different request instead of retrying the same call: told the model its reply failed (one new message, nothing run on it), had a cut tool call refused and the model told, or rewrote the request after a context-length error; the text is shown | review |
 | `RECOVERED_DIFFERENT` | recovered, but the output differs from the healthy run | review |
 | `REPLAY_UNSTABLE`, `NOT_REACHED`, `N/A` | the trial says nothing about the agent (setup) | - |
@@ -64,6 +64,20 @@ from a model failure by redoing a tool call is caught. Which tools are writes is
 writes = ["run_report"]        # tools that change something although their name does not say so
 reads = ["send_preview"]       # tools that only read although their name sounds like a write
 ```
+
+## Continuation: the run goes on past the fault
+
+After a fault, a request that matches nothing recorded is answered with the next healthy reply of the plan (the reply to the failed call first,
+then the following ones; the last one again after the end), of the same provider and the same kind (streamed or not). Without this the replay
+would answer with an error, the agent would die, and the verdict would have to be guessed from one request.
+
+- **Bounded or not.** After 8 such answers the agent is flagged as not stopping and cut off: `RETRY_STORM`.
+- **Persistent faults follow the agent.** `"empty_content!persistent"` makes every answer defective again, so an agent that re-prompts shows
+  whether it gives up (`SURFACED`) or asks forever (`RETRY_STORM`).
+- **What it cannot show.** A real model might answer a re-prompt badly or well; CrossTrace answers with the healthy reply. It shows that the
+  agent stops and how, not that its re-prompt works. Without a fitting recorded reply (another provider, or streamed versus not) it falls back to
+  an error, and the result stays a review.
+- **Off:** `crosstrace test --no-continue` or `[test] continue = false`.
 
 ## Coverage, and why one run is not enough
 

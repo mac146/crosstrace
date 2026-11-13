@@ -48,6 +48,8 @@ masks = []
 [test]
 # Verdicts that should not fail the build (e.g. "ENDED_EARLY" if your agent ends politely on errors).
 allow = []
+# continue = false         # default true: after a fault, a request that matches nothing recorded is answered with the next healthy reply, so the
+#                          # run reaches its real end and the verdict comes from how it ended (not from the shape of a message)
 # trial_timeout_s = 90     # a trial running longer is a HANG. Default: 4x the slowest fault-free replay, at least 60 s
 
 # [modes.pr]               # override the built-in modes: faults, max_exchanges (0 = all), stability_runs, jobs
@@ -104,6 +106,7 @@ class Config:
     modes: dict
     fault_params: dict
     mcp: dict = field(default_factory=dict)          # {"writes": [...], "reads": [...]}: tool names that override the write heuristic
+    continuation: bool = True                        # answer requests that match nothing after a fault, so the run reaches its real end
 
     @property
     def state_dir(self):
@@ -182,7 +185,7 @@ def parse(d, root):
     rep = d.get("replay") or {}
     _check_keys("[replay]", rep, {"masks"})
     test = d.get("test") or {}
-    _check_keys("[test]", test, {"allow", "trial_timeout_s"})
+    _check_keys("[test]", test, {"allow", "trial_timeout_s", "continue"})
     allow = set(test.get("allow", []))
     bad = allow - VERDICTS_ALLOWED_IN_ALLOW
     if bad:
@@ -218,7 +221,7 @@ def parse(d, root):
                   cwd=os.path.join(root, agent.get("cwd", ".")), env={k: str(v) for k, v in (agent.get("env") or {}).items()},
                   runs=max(1, int(rec.get("runs", 1))), upstreams=dict(upstreams), masks=list(rep.get("masks", [])), allow=allow,
                   trial_timeout_s=test.get("trial_timeout_s"), modes=modes, fault_params=fault_params,
-                  mcp={"writes": list(mcp.get("writes", [])), "reads": list(mcp.get("reads", []))})
+                  mcp={"writes": list(mcp.get("writes", [])), "reads": list(mcp.get("reads", []))}, continuation=bool(test.get("continue", True)))
 
 
 def template(command):

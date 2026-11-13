@@ -32,7 +32,7 @@ def _error_body(kind, message):
 
 class ModelProxy:
     def __init__(self, mode="replay", recording=None, upstreams=None, masks=None, mask_defaults=True, faults=None,
-                 host="127.0.0.1", port=0, speed=0.0, upstream_timeout=600.0):
+                 host="127.0.0.1", port=0, speed=0.0, upstream_timeout=600.0, continuation=False, continuation_cap=8):
         if mode not in ("record", "replay", "live"):
             raise ValueError(f"mode must be record, replay or live, not {mode!r}")
         if mode == "replay" and recording is None:
@@ -46,6 +46,11 @@ class ModelProxy:
         self.host, self.port = host, port
         self.speed = speed                    # replay pacing: 0 = as fast as possible, 1 = recorded event timing
         self.upstream_timeout = upstream_timeout
+        # Continuation: after a fault, a request that matches nothing recorded (the agent changed course: re-prompted, summarised, rewrote
+        # its request) is answered with the next healthy reply of the plan instead of a 502, so the run reaches its real end and the
+        # verdict can come from the outcome. After `continuation_cap` such answers the agent is not stopping: it is flagged and cut off.
+        self.continuation, self.continuation_cap = continuation, continuation_cap
+        self._cont_ptr, self._cont_count = None, 0
         self.connections = []                 # one dict per hop-1 connection
         self.requests = []                    # one dict per request (the log the verdict engine reads)
         self._next_idx = 0
@@ -139,8 +144,18 @@ class ModelProxy:
             ex, how = self.session.match(key, state_key)
             entry.update(how=how, idx=ex.idx if ex else None)
             if ex is None:
-                entry["status"] = 502
                 entry["request"] = norm            # kept only for misses: shows the user which field differs from the recording
+                cont = self._continuation(body, entry) if self.continuation else None
+                if cont is not None:
+                    ex, fault = cont
+                    entry.update(how="continued", served_idx=ex.idx)
+                    if fault is not None:
+                        entry["fault"] = fault.name
+                        return await fault.serve(rw, ex, entry)
+                    entry["status"] = ex.status
+                    await self._serve(rw, ex)
+                    return True
+                entry["status"] = 502
                 await rw.send_full(502, JSON, _error_body("crosstrace_replay_miss", "no recorded exchange matches this request"))
                 return True
             fault = self.faults.select(entry, ex) if self.faults else None
@@ -159,6 +174,31 @@ class ModelProxy:
             record = Exchange(idx=idx, path=path, provider=provider, key=key, state_key=state_key, request=norm,
                               status=0, headers=[], stream=bool(body.get("stream")))
         return await self._forward(req, rw, entry, provider, record)
+
+    def _continuation(self, body, entry):
+        """(exchange, fault or None) to answer a request that matched nothing, or None for the plain 502.
+
+        Only after a fault has been injected: before that a miss means the replay is unstable. The answer is the next recorded reply of the
+        plan, starting with the reply to the failed call (a re-prompt is usually the agent asking for that step again), of the same provider
+        and the same kind (streamed or not) as the request. A persistent fault keeps hitting these answers, which is how the agent's own
+        recovery is tested for a bound."""
+        plan = self.faults
+        if plan is None or not plan.injected:
+            return None
+        if self._cont_ptr is None:
+            self._cont_ptr = plan.at if plan.at is not None else 0
+        self._cont_count += 1
+        entry["continued_n"] = self._cont_count
+        if self._cont_count > self.continuation_cap:
+            entry["unbounded"] = True
+            return None
+        want_stream, exchanges = bool(body.get("stream")), self.recording.exchanges
+        fits = [j for j, e in enumerate(exchanges) if e.stream == want_stream and e.provider == entry.get("provider")]
+        if not fits:
+            return None
+        j = next((j for j in fits if j >= self._cont_ptr), fits[-1])           # past the end of the plan: the last one again
+        self._cont_ptr = j + 1
+        return exchanges[j], plan.select_continued(entry, exchanges[j])
 
     async def _serve(self, rw, ex):
         if not ex.stream:

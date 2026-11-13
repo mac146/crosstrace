@@ -17,7 +17,7 @@ from crosstrace.mcp.verdict import classify_tool, write_check
 from crosstrace.mcp.wrap import ENV as MCP_ENV
 from crosstrace.proxy import FaultPlan, ProxyThread, make_fault
 from crosstrace.proxy.recording import Recording
-from crosstrace.verdict import TrialResult, attempts_at, classify, early_silent, STORM_LIMIT
+from crosstrace.verdict import TrialResult, attempts_at, classify, early_silent, next_move_verdict, STORM_LIMIT
 
 # variables that would send the agent around the proxy, or to a real provider with a real key during replay
 STRIP_ENV = ("OPENAI_BASE_URL", "OPENAI_API_BASE", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_BASE", "HTTP_PROXY", "HTTPS_PROXY",
@@ -220,18 +220,24 @@ def stability(spec, recording, runs=2):
             "requests": [{k: r.get(k) for k in ("user-agent",)} for r in ua[:1]]}
 
 
-def trial(spec, recording, fault, at, heal_after=1, path=0, timeout_s=None, **params):
+def trial(spec, recording, fault, at, heal_after=1, path=0, timeout_s=None, continuation=True, **params):
     """One fault at one exchange; returns a TrialResult with the verdict."""
     f = make_fault(fault, **params) if isinstance(fault, str) else fault
     plan = FaultPlan(f, at=at, heal_after=heal_after)
     if not f.applies(recording.exchanges[at]):
         return TrialResult(path=path, fault=f.name, at=at, verdict="N/A", detail=f"{f.name} does not apply to exchange {at}")
     calls = _mcp_calls(recording)
-    with ProxyThread(mode="replay", recording=recording, faults=plan, masks=spec.masks) as p, McpRun(spec, "replay", calls) as m:
+    healthy = recording.meta.get("stdout", "")
+    with ProxyThread(mode="replay", recording=recording, faults=plan, masks=spec.masks, continuation=continuation) as p, \
+            McpRun(spec, "replay", calls) as m:
         def watch():
             # With MCP tool calls the run must finish: stopping at the first sign of SILENT could cut off the writes that come after it
             if calls is None and early_silent(at, p.requests):
-                return "silent"
+                # With continuation, a change of course CrossTrace cannot read yet (DIVERGED, REPROMPTED) is settled by how the run ends
+                if not (continuation and next_move_verdict(f.name, at, recording, list(p.requests), healthy) in ("DIVERGED", "REPROMPTED")):
+                    return "silent"
+            if any(r.get("unbounded") for r in list(p.requests)):
+                return "storm"                  # the agent kept sending different requests past the cap: it will not stop on its own
             if attempts_at(at, p.requests) > STORM_LIMIT:
                 return "storm"
             return None
@@ -297,7 +303,7 @@ def plan_trials(recordings, faults, max_exchanges=0, seed=0, only_path=None, onl
     return out
 
 
-def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None):
+def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None, continuation=True):
     """Run planned trials, `jobs` at a time (each trial has its own proxy and agent process). Results in plan order."""
     from concurrent.futures import ThreadPoolExecutor
 
@@ -307,7 +313,7 @@ def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None)
         if f.tool_fault:
             r = tool_trial(spec_for(pi), recordings[pi], f, k, path=pi, timeout_s=timeout_s)
         else:
-            r = trial(spec_for(pi), recordings[pi], f, k, heal_after=fs.heal, path=pi, timeout_s=timeout_s)
+            r = trial(spec_for(pi), recordings[pi], f, k, heal_after=fs.heal, path=pi, timeout_s=timeout_s, continuation=continuation)
         r.fault = fs.label
         if progress:
             progress(r)
