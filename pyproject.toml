@@ -6,8 +6,21 @@ build-backend = "setuptools.build_meta"
 name = "crosstrace"
 version = "0.1.0.dev0"            # keep equal to crosstrace/__init__.py
 description = "Find the failures your AI agent hides: replay real runs with byte-level provider faults and get a verdict for each"
+readme = "PYPI.md"                # short, with absolute links (the repo README has relative ones that would break on PyPI)
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Mayank Kumar Singh" }]
+keywords = ["ai-agents", "testing", "fault-injection", "resilience", "llm", "mcp", "ci"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+]
 # the product needs only httpx; the research prototype (agent/, collectors/, eval/ ...) runs from the repo with requirements-dev.txt
 dependencies = ["httpx>=0.27"]
 
@@ -15,6 +28,12 @@ dependencies = ["httpx>=0.27"]
 dev = ["pytest"]
 mcp = ["mcp>=2", "openai"]          # only for the MCP example agent and its end-to-end tests
 research = ["opentelemetry-sdk==1.45.2"]
+
+[project.urls]
+Homepage = "https://crosstrace-site.vercel.app/"
+Repository = "https://github.com/mac146/crosstrace"
+Issues = "https://github.com/mac146/crosstrace/issues"
+Documentation = "https://github.com/mac146/crosstrace/blob/main/docs/cli.md"
 
 [project.scripts]
 crosstrace = "crosstrace.cli:main"
