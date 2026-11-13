@@ -28,6 +28,7 @@ CrossTrace sets `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` to its local proxy fo
 | `IGNORED_RETRY_AFTER` | retried a 429 before `Retry-After` | problem |
 | `WRONG_RETRY` | retried a non-retryable error (400, 401) | problem |
 | `ENDED_EARLY` | exited 0 without the failed call; check its output says the task failed | review |
+| `DIVERGED` | after a defective reply, sent a request that matches nothing recorded and nothing shows it acted on the reply or carried on as before; the facts are shown | review |
 | `REPROMPTED` | answered the failure with a different request instead of retrying the same call: told the model its reply failed (one new message, nothing run on it), had a cut tool call refused and the model told, or rewrote the request after a context-length error; the text is shown | review |
 | `RECOVERED_DIFFERENT` | recovered, but the output differs from the healthy run | review |
 | `REPLAY_UNSTABLE`, `NOT_REACHED`, `N/A` | the trial says nothing about the agent (setup) | - |

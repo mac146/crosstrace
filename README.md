@@ -130,6 +130,13 @@ error, or carry on as if nothing happened?
 | `RETRY_STORM`, `IGNORED_RETRY_AFTER`, `WRONG_RETRY` | retried too often, too soon, or what can't succeed | problem |
 | `ENDED_EARLY`, `RECOVERED_DIFFERENT` | exited 0 without the failed step, or recovered with a different answer | review |
 | `REPROMPTED` | answered the failure with a different request instead of retrying the same call: told the model its reply failed, had its tool arguments refused and the model told, or summarised after a context-length error (the text is shown, so you can judge it) | review |
+| `DIVERGED` | after a reply that arrived but was defective, sent a request that matches nothing recorded, and nothing shows it acted on the reply or carried on as before. The facts are shown; CrossTrace cannot tell whether it was right | review |
+
+**What can fail your build, and what cannot.** A verdict fails the build only when it rests on something CrossTrace measured: a hang, too many
+or too fast retries, a retried request that can never succeed, a write that ran twice, an answer printed cut, or an agent that acted on a
+defective reply or carried on exactly as if nothing had happened. When an agent changes course in a way CrossTrace can only guess at, the
+result is a **review** with the facts shown (what it sent, how many messages), never a failure. Every result in the JSON report carries
+`observed`: the attempts, the status of the fault, and the agent's next move.
 
 No LLM judge and no comparison of free-text answers: the verdict comes from which model call the agent made next, so it is the same
 every time. Faults are injected at every model call of every recorded path (nightly) or a fixed sample (pull requests), so an agent can't

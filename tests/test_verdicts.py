@@ -12,7 +12,7 @@ pytest.importorskip("openai")
 
 from crosstrace import runner                          # noqa: E402
 from crosstrace.proxy.recording import Exchange, Recording  # noqa: E402
-from crosstrace.verdict import PROBLEM, classify, early_silent, summarize  # noqa: E402
+from crosstrace.verdict import PROBLEM, REVIEW, classify, early_silent, summarize  # noqa: E402
 from mockservices.sse_server import serve_in_thread    # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -80,7 +80,7 @@ def test_nondeterministic_prompt_is_reported_unstable_not_passed(upstream):
     ("good", "context_length", 1, 1, {}, "SURFACED"),
 ])
 def test_each_verdict_on_purpose(upstream, mode, fault, at, heal, params, expected):
-    timeout = 8.0 if fault == "stream_stall" else 30.0
+    timeout = 12.0 if fault == "stream_stall" else 30.0       # 12: a 3 s read timeout plus a retry must fit even on a busy machine
     r = T(mode, upstream, fault, at, heal_after=heal, timeout_s=timeout, **params)
     assert r.verdict == expected, (r.verdict, r.detail, r.attempts, r.retry_gaps_s, r.stdout[-200:])
 
@@ -143,13 +143,47 @@ def test_telling_the_model_about_the_failure_is_a_review_not_silent():
     # no reply arrived (an error status): an agent that carries on with an added message is making up context, not reporting a failure
     assert verdict([{"role": "user", "content": "The order system did not respond. Answer anyway."}], status=500).verdict == "SILENT"
     assert verdict([{"role": "user", "content": "The order system did not respond. Answer anyway."}], status=None).verdict == "SILENT"
-    # a changed conversation, or more than one new message, is not a re-prompt
-    assert verdict(told, prefix=[{"role": "system", "content": "be brief"}, {"role": "user", "content": "a different task"}]).verdict == "SILENT"
-    assert verdict(told + [{"role": "assistant", "content": "x"}, {"role": "user", "content": "y"}]).verdict == "SILENT"
-    assert verdict([{"role": "assistant", "content": "cut"}]).verdict == "SILENT"                       # no message addressed to the model
+    # a changed conversation, or more than one new message, is not a re-prompt: CrossTrace saw it change course and cannot say more (review)
+    assert verdict(told, prefix=[{"role": "system", "content": "be brief"}, {"role": "user", "content": "a different task"}]).verdict == "DIVERGED"
+    assert verdict(told + [{"role": "assistant", "content": "x"}, {"role": "user", "content": "y"}]).verdict == "DIVERGED"
+    assert verdict([{"role": "assistant", "content": "cut"}]).verdict == "DIVERGED"                     # no message addressed to the model
     # review, not a problem: it does not fail the build
     from crosstrace.verdict import PROBLEM, REVIEW
     assert "REPROMPTED" in REVIEW and "REPROMPTED" not in PROBLEM
+
+
+def test_after_a_defective_reply_only_what_can_be_seen_decides_silent_or_diverged():
+    """The architectural rule: a reply arrived (HTTP 200) but was defective, and the agent sent something that matches nothing recorded.
+    SILENT needs evidence (it acted on the reply, or carried on exactly as in the healthy run); anything else is DIVERGED, a review."""
+    healthy_next = {"messages": [{"role": "system", "content": "be brief"}, {"role": "user", "content": "task"},
+                                 {"role": "assistant", "content": "the complete plan"}, {"role": "user", "content": "now answer"}]}
+    first = {"messages": healthy_next["messages"][:2]}
+    recd = Recording(exchanges=[
+        Exchange(idx=0, path="/v1/chat/completions", provider="openai", key="k0", state_key="s0", request=first, status=200, headers=[],
+                 stream=False, body="{}"),
+        Exchange(idx=1, path="/v1/chat/completions", provider="openai", key="k1", state_key="s1", request=healthy_next, status=200, headers=[],
+                 stream=False, body="{}")])
+    p = {"provider": "openai"}
+
+    def run(next_messages, status=200, fault="length_cut"):
+        reqs = [{**p, "idx": 0, "how": "in_order", "t": 0, "fault": fault, "attempt": 1, "status": status},
+                {**p, "idx": None, "how": "miss", "t": 1, "request": {"messages": next_messages}}]
+        return classify(fault, 0, recd, reqs, 1, "", False, "ok")
+
+    m = healthy_next["messages"]
+    cut_plan = m[:2] + [{"role": "assistant", "content": "the compl"}, m[3]]
+    r = run(cut_plan)                                                    # the healthy next request, with only the damaged reply different
+    assert r.verdict == "SILENT" and "carried on exactly as in the healthy run" in r.detail and r.observed["next_move"] == "continued_healthy_flow"
+    r = run(m[:2] + [{"role": "assistant", "content": "x"}, {"role": "tool", "tool_call_id": "c", "content": "done"}])
+    assert r.verdict == "SILENT" and r.observed["next_move"] == "acted_on_reply"             # a tool result was built from the bad reply
+    r = run(m[:2] + [{"role": "user", "content": "summarise the above and start again"}, {"role": "user", "content": "please"}, m[3]])
+    assert r.verdict == "DIVERGED" and r.observed["next_move"] == "diverged" and "matches nothing recorded" in r.detail
+    assert "5 messages (the failed request had 2)" in r.detail                               # facts, not a judgement
+    assert r.verdict not in PROBLEM and r.verdict in REVIEW
+    # no reply arrived (an error status): an agent that goes on with a request that matches nothing is still SILENT, as it always was
+    assert run(m[:2] + [{"role": "user", "content": "The system did not respond. Answer anyway."}], status=500, fault="server_error").verdict == "SILENT"
+    # every result carries its observations as data
+    assert r.observed["attempts"] == 1 and r.observed["fault_status"] == 200
 
 
 def test_a_cut_tool_call_the_framework_refused_is_a_review_but_one_it_may_have_run_is_not():

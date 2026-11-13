@@ -46,6 +46,7 @@ def build(cfg, mode, recordings, stability, results, seconds, seed, not_applicab
 
     def trial_json(r, full):
         d = {k: getattr(r, k) for k in ("path", "fault", "at", "verdict", "detail", "attempts", "retry_gaps_s", "exit_code", "seconds")}
+        d["observed"] = r.observed                          # the facts behind the verdict: attempts, fault status, the agent's next move
         d["rerun"] = f"crosstrace test {r.trial_id.replace('--fault ' + r.fault.split('!')[0], '--fault ' + r.fault)}"
         if full:
             d["stdout_tail"] = r.stdout[-500:]

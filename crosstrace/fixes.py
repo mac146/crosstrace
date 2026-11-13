@@ -86,6 +86,10 @@ def advice(verdict, fault, requests=None):
     if verdict == "WRONG_RETRY":
         return ["do not retry 400/401/403/404/422: they fail the same way every time; retry only connection errors, timeouts, 408, 409, "
                 "429 and 5xx", "for context-length errors, shrink the context (summarize, drop old turns) instead of resending"]
+    if verdict == "DIVERGED":
+        return ["the agent changed course after the failure in a way CrossTrace cannot classify: read what it sent next (shown above) and check "
+                "that it handled the failure and that it stops if the model keeps failing",
+                "if the right response is simply to try the same call again, retry it (a retry is cheaper and cannot change the conversation)"]
     if verdict == "REPROMPTED":
         return ["re-prompting the model with the error is a valid way to recover; check that nothing ran on the failed reply first",
                 "make sure the re-prompt is bounded: if the model keeps failing, stop with a clear error instead of asking forever",

@@ -18,10 +18,10 @@ from dataclasses import asdict, dataclass, field
 from crosstrace.proxy.faults import NON_RETRYABLE, json_body, text_slot, parse_event
 
 OK = {"RECOVERED", "SURFACED"}
-REVIEW = {"RECOVERED_DIFFERENT", "ENDED_EARLY", "REPROMPTED"}
+REVIEW = {"RECOVERED_DIFFERENT", "ENDED_EARLY", "DIVERGED", "REPROMPTED"}
 PROBLEM = {"SILENT", "PARTIAL", "HANG", "RETRY_STORM", "IGNORED_RETRY_AFTER", "WRONG_RETRY", "DUPLICATE"}
 SETUP = {"REPLAY_UNSTABLE", "NOT_REACHED", "N/A"}
-ORDER = ["DUPLICATE", "HANG", "WRONG_RETRY", "RETRY_STORM", "IGNORED_RETRY_AFTER", "SILENT", "PARTIAL", "ENDED_EARLY", "REPROMPTED", "RECOVERED_DIFFERENT",
+ORDER = ["DUPLICATE", "HANG", "WRONG_RETRY", "RETRY_STORM", "IGNORED_RETRY_AFTER", "SILENT", "PARTIAL", "ENDED_EARLY", "DIVERGED", "REPROMPTED", "RECOVERED_DIFFERENT",
          "SURFACED", "RECOVERED", "NOT_REACHED", "REPLAY_UNSTABLE", "N/A"]
 STORM_LIMIT = 6            # attempts at one exchange above which retries are a storm
 LONG_RETRY_AFTER_S = 120   # longer server-directed waits are not judged by spacing (HANG covers them)
@@ -40,6 +40,7 @@ class TrialResult:
     seconds: float = 0.0
     stdout: str = ""
     requests: list = field(default_factory=list)
+    observed: dict = field(default_factory=dict)   # facts seen on the wire: attempts, fault status, and the agent's next move
 
     @property
     def trial_id(self):
@@ -182,6 +183,40 @@ def _rewritten(faulted_request, next_request):
     return _message_text(last) if isinstance(last, dict) else str(last)
 
 
+def _acted_on(faulted_request, next_request):
+    """True when the agent's next request is the failed one plus something that carries a tool call or a tool result: it did something with the reply."""
+    before, after = _conversation(faulted_request), _conversation(next_request)
+    if before is None or after is None or after[:len(before)] != before:
+        return False
+    return any(_runs_something(m) for m in after[len(before):])
+
+
+def _continues_healthy_flow(recording, at, next_request):
+    """True when the next request is the recorded healthy next request, except for what came from the failed reply: the same conversation
+    shape, the same system and user messages. An agent that does this carried on as if nothing had gone wrong."""
+    if at + 1 >= len(recording.exchanges):
+        return False
+    healthy, got = _conversation(recording.exchanges[at + 1].request), _conversation(next_request)
+    if not healthy or not got or len(healthy) != len(got):
+        return False
+    for h, g in zip(healthy, got):
+        if not isinstance(h, dict) or not isinstance(g, dict):
+            return False
+        role = h.get("role") or h.get("type")
+        if role != (g.get("role") or g.get("type")) or (role in ("system", "user", "developer") and h.get("content") != g.get("content")):
+            return False
+    return True
+
+
+def _describe_divergence(faulted_request, next_request):
+    """What changed, as facts: how many messages, and the last one."""
+    before, after = _conversation(faulted_request) or [], _conversation(next_request) or []
+    last = after[-1] if after else None
+    text = (_message_text(last) if isinstance(last, dict) else str(last or "")).replace("\n", " ")
+    text = text if len(text) <= 160 else text[:157] + "..."
+    return f"{len(after)} messages (the failed request had {len(before)}); the last: \"{text}\""
+
+
 def _reprompt(faulted_request, next_request):
     """The text the agent added to tell the model its last reply failed, or None.
 
@@ -228,6 +263,7 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
     attempts = [first] + [r for r in after if r.get("idx") == at]
     res.attempts = len(attempts)
     res.retry_gaps_s = [round(b["t"] - a["t"], 3) for a, b in zip(attempts, attempts[1:])]
+    res.observed = {"attempts": res.attempts, "fault_status": first.get("status"), "next_move": "retried_same" if res.attempts > 1 else "none"}
     success_pos = next((k for k, r in enumerate(after) if r.get("idx") == at and "fault" not in r), None)
     other_pos = next((k for k, r in enumerate(after) if r.get("idx") != at), None)
     via = " via fallback" if any(r.get("how") == "fallback" for r in attempts) else ""
@@ -239,6 +275,7 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
         between = [r for r in after[:success_pos if success_pos is not None else len(after)] if r.get("idx") != at]
         if between and all(r.get("how") == "repeat" and r.get("idx") is not None and r["idx"] < at for r in between):
             tries += f", after starting over from exchange {min(r['idx'] for r in between)}"
+            res.observed["next_move"] = "started_over"
             other_pos = None
 
     if hang:
@@ -264,19 +301,30 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
         # that carries on is inventing context, whatever message it adds
         said = _reprompt(ex.request, nxt.get("request")) if nxt.get("idx") is None and not cut and first.get("status") == 200 else None
         rejected = _rejected_tool_results(ex.request, nxt.get("request")) if cut and first.get("status") == 200 else []
+        res.observed["next_move"] = "carried_cut_tool_call" if cut else "different_request" if nxt.get("idx") is None else "moved_to_recorded_next"
         if rejected:                   # the framework refused the cut arguments and told the model: the tool did not run
+            res.observed["next_move"] = "refused_tool_call"
             res.verdict = "REPROMPTED"
             shown = rejected[0] if len(rejected[0]) <= 160 else rejected[0][:157] + "..."
             res.detail = (f"the cut tool call was refused, not run, and the model was told: \"{shown}\" instead of retrying exchange {at} "
                           f"({tries}); check that this stops if the model keeps sending bad arguments")
+        elif (first.get("status") == 200 and nxt.get("idx") is None and not cut
+              and _continues_healthy_flow(recording, at, nxt.get("request"))):
+            # checked BEFORE the re-prompt shape: "the failed reply plus one user message" is also what carrying on looks like, and the
+            # tie-breaker is whether that message is the healthy run's own next step
+            res.observed["next_move"] = "continued_healthy_flow"
+            res.detail = (f"carried on exactly as in the healthy run, with the failed reply in its context, instead of retrying "
+                          f"exchange {at} ({tries})")
         elif fault == "context_length" and nxt.get("idx") is None and _rewritten(ex.request, nxt.get("request")) is not None:
             # the right answer to a context-length error is a smaller request, not the same one again: it sent a different one
+            res.observed["next_move"] = "rewrote_request"
             res.verdict = "REPROMPTED"
             text = _rewritten(ex.request, nxt.get("request"))
             shown = text if len(text) <= 160 else text[:157] + "..."
             res.detail = (f"answered the context-length error with a different request instead of resending the same one ({tries}): "
                           f"\"{shown}\"; check that it really shrinks the context and that this stops if the error keeps coming")
         elif said:                     # it told the model about the failure instead of retrying the same call
+            res.observed["next_move"] = "told_model"
             res.verdict = "REPROMPTED"
             shown = said if len(said) <= 160 else said[:157] + "..."
             res.detail = (f"told the model the reply failed instead of retrying exchange {at}: \"{shown}\" ({tries}); "
@@ -284,7 +332,22 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
         elif cut:                        # the clearest harm: a tool ran on arguments from a response that never finished
             name, args = cut[0]
             res.detail = f"ran tool {name} with arguments {args} from a response that never finished, instead of retrying exchange {at} ({tries})"
-        elif nxt.get("idx") is None:   # its next request is not in the recording: its context changed (partial or missing data)
+        elif first.get("status") == 200 and nxt.get("idx") is None:
+            # a reply arrived but was defective, and the agent sent something that matches nothing recorded. Only what can be seen decides:
+            if _acted_on(ex.request, nxt.get("request")):
+                res.observed["next_move"] = "acted_on_reply"
+                res.detail = (f"acted on the failed reply: its next request carries a tool call or result built from it, instead of "
+                              f"retrying exchange {at} ({tries})")
+            elif _continues_healthy_flow(recording, at, nxt.get("request")):
+                res.observed["next_move"] = "continued_healthy_flow"
+                res.detail = (f"carried on exactly as in the healthy run, with the failed reply in its context, instead of retrying "
+                              f"exchange {at} ({tries})")
+            else:
+                res.observed["next_move"] = "diverged"
+                res.verdict = "DIVERGED"
+                res.detail = (f"sent a request that matches nothing recorded instead of retrying exchange {at} ({tries}): "
+                              f"{_describe_divergence(ex.request, nxt.get('request'))}; CrossTrace cannot tell whether this handled the failure")
+        elif nxt.get("idx") is None:   # no reply arrived (an error status or a reset) and the agent went on with a request that matches nothing
             res.detail = f"made its next model call with the failed response in its context instead of retrying exchange {at} ({tries})"
         else:
             res.detail = f"moved on to exchange {nxt['idx']} without a successful exchange {at} ({tries})"
