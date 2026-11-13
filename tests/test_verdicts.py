@@ -129,6 +129,9 @@ def test_telling_the_model_about_the_failure_is_a_review_not_silent():
     r = verdict(told)
     assert r.verdict == "REPROMPTED" and "cut off" in r.detail and "check that nothing ran" in r.detail
     assert verdict([{"role": "user", "content": "That reply was blank. Please answer again."}]).verdict == "REPROMPTED"  # empty reply dropped
+    # frameworks also add the message as a system or developer message (pydantic-ai: "Please return text or call a tool.")
+    assert verdict([{"role": "system", "content": "Please return text or call a tool."}]).verdict == "REPROMPTED"
+    assert verdict([{"role": "developer", "content": "Your last reply was blank; answer now."}]).verdict == "REPROMPTED"
     # blocks (Anthropic style) work too
     assert verdict([{"role": "assistant", "content": [{"type": "text", "text": "cut"}]},
                     {"role": "user", "content": [{"type": "text", "text": "that reply was cut off, continue"}]}]).verdict == "REPROMPTED"
@@ -147,6 +150,40 @@ def test_telling_the_model_about_the_failure_is_a_review_not_silent():
     # review, not a problem: it does not fail the build
     from crosstrace.verdict import PROBLEM, REVIEW
     assert "REPROMPTED" in REVIEW and "REPROMPTED" not in PROBLEM
+
+
+def test_a_cut_tool_call_the_framework_refused_is_a_review_but_one_it_may_have_run_is_not():
+    """Found on pydantic-ai: after a cut tool call it validates the arguments, does not run the tool, and sends the model the validation
+    error. A framework that completes the partial JSON and runs the tool (LangChain) must stay SILENT."""
+    ask = {"input": [{"role": "user", "content": "where is order 42"}]}
+    recd = Recording(exchanges=[Exchange(idx=0, path="/v1/responses", provider="openai", key="k0", state_key="s0", request=ask, status=200,
+                                         headers=[], stream=True, events=[])])
+    call = {"type": "function_call", "name": "get_order", "arguments": '{"order_', "call_id": "c1"}
+    p = {"provider": "openai"}
+
+    def verdict(*added, status=200):
+        reqs = [{**p, "idx": 0, "how": "in_order", "t": 0, "fault": "tool_args_cut", "attempt": 1, "status": status},
+                {**p, "idx": None, "how": "miss", "t": 1, "request": {"input": ask["input"] + [call, *added]}}]
+        return classify("tool_args_cut", 0, recd, reqs, 1, "", False, "ok")
+
+    refused = {"type": "function_call_output", "call_id": "c1",
+               "output": '{"error":[{"type":"json_invalid","msg":"Invalid JSON: EOF while parsing a string at line 1 column 8"}]}'}
+    r = verdict(refused)
+    assert r.verdict == "REPROMPTED" and "refused, not run" in r.detail and "json_invalid" in r.detail
+    assert verdict({"type": "function_call_output", "call_id": "c1", "output": "{'status': 'shipped'}"}).verdict == "SILENT"      # it ran
+    assert verdict(refused, {"type": "function_call_output", "call_id": "c2", "output": "ok"}).verdict == "SILENT"           # one result is normal
+    assert verdict().verdict == "SILENT"                                                                                      # no result at all
+    assert verdict(refused, status=500).verdict == "SILENT"                                                                   # no reply arrived
+    # the same refusal in chat-completions and Anthropic shapes
+    chat_ask = {"messages": [{"role": "user", "content": "q"}]}
+    chat_recd = Recording(exchanges=[Exchange(idx=0, path="/v1/chat/completions", provider="openai", key="k0", state_key="s0", request=chat_ask,
+                                              status=200, headers=[], stream=True, events=[])])
+    tc = {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "function": {"name": "get_order", "arguments": '{"order_'}}]}
+    for result in ({"role": "tool", "tool_call_id": "c1", "content": "Error: Unterminated string starting at: line 1 column 2"},
+                   {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c1", "content": "Unexpected end of JSON input"}]}):
+        reqs = [{**p, "idx": 0, "how": "in_order", "t": 0, "fault": "tool_args_cut", "attempt": 1, "status": 200},
+                {**p, "idx": None, "how": "miss", "t": 1, "request": {"messages": chat_ask["messages"] + [tc, result]}}]
+        assert classify("tool_args_cut", 0, chat_recd, reqs, 1, "", False, "ok").verdict == "REPROMPTED"
 
 
 def test_starting_over_is_a_recovery_but_a_changed_context_is_not():

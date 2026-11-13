@@ -10,6 +10,7 @@ Inputs are the proxy's request log, the fault plan's attempt counts and the agen
 """
 import email.utils
 import json
+import re
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -131,10 +132,44 @@ def _message_text(message):
     return str(content or "").strip()
 
 
+# What a framework's own argument validation says about a tool call whose JSON was cut off (pydantic: json_invalid, "Invalid JSON: EOF
+# while parsing"; Python: "Expecting value", "Unterminated string"; Node: "Unexpected end of JSON input"; and the common wordings).
+_REJECTION = re.compile(r"json_invalid|invalid json|invalid_json|jsondecodeerror|unexpected end of json|unterminated string|eof while parsing|"
+                        r"expecting (value|property name|',' delimiter|':' delimiter)|failed to parse|could not parse|not valid json|malformed",
+                        re.IGNORECASE)
+
+
+def _tool_result_texts(body):
+    """The text of every tool result in a request's conversation, in order (chat completions, Anthropic and Responses)."""
+    out = []
+    for m in _conversation(body) or []:
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") == "tool":
+            out.append(_message_text(m))
+        elif m.get("type") == "function_call_output":
+            out.append(str(m.get("output") or ""))
+        elif isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    c = b.get("content")
+                    out.append(" ".join(x.get("text", "") for x in c if isinstance(x, dict)) if isinstance(c, list) else str(c or ""))
+    return out
+
+
+def _rejected_tool_results(faulted_request, next_request):
+    """The tool results the agent added after the faulted reply, when every one of them is the framework refusing the cut arguments.
+
+    Such an agent validated the arguments, did not run the tool, and told the model to try again: it handled the failure. If any added
+    result looks like a normal result, or there is none, the tool may have run on the cut arguments and this returns [] (SILENT)."""
+    added = _tool_result_texts(next_request)[len(_tool_result_texts(faulted_request)):]
+    return added if added and all(_REJECTION.search(t) for t in added) else []
+
+
 def _reprompt(faulted_request, next_request):
     """The text the agent added to tell the model its last reply failed, or None.
 
-    A re-prompt is the faulted request unchanged, then at most the failed reply and ONE new user message, and nothing that runs a tool.
+    A re-prompt is the faulted request unchanged, then at most the failed reply and ONE new message to the model, and nothing that runs a tool.
     CrossTrace cannot tell a message that reports the failure from one that reports what the agent did with it (a text-protocol agent may
     send its own observations as user messages), so the verdict is a review: the text is shown for a person to judge."""
     before, after = _conversation(faulted_request), _conversation(next_request)
@@ -143,7 +178,8 @@ def _reprompt(faulted_request, next_request):
     added = after[len(before):]
     if not 1 <= len(added) <= 2 or any(_runs_something(m) for m in added):
         return None
-    if added[-1].get("role") != "user" or (len(added) == 2 and added[0].get("role") != "assistant"):
+    # the message that tells the model is a user message, or a system/developer one (pydantic-ai adds "Please return text or call a tool.")
+    if added[-1].get("role") not in ("user", "system", "developer") or (len(added) == 2 and added[0].get("role") != "assistant"):
         return None
     return _message_text(added[-1])
 
@@ -210,7 +246,13 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
         # only when a reply arrived (HTTP 200) and was defective: after an error status there is no reply to tell the model about, so an agent
         # that carries on is inventing context, whatever message it adds
         said = _reprompt(ex.request, nxt.get("request")) if nxt.get("idx") is None and not cut and first.get("status") == 200 else None
-        if said:                       # it told the model about the failure instead of retrying the same call
+        rejected = _rejected_tool_results(ex.request, nxt.get("request")) if cut and first.get("status") == 200 else []
+        if rejected:                   # the framework refused the cut arguments and told the model: the tool did not run
+            res.verdict = "REPROMPTED"
+            shown = rejected[0] if len(rejected[0]) <= 160 else rejected[0][:157] + "..."
+            res.detail = (f"the cut tool call was refused, not run, and the model was told: \"{shown}\" instead of retrying exchange {at} "
+                          f"({tries}); check that this stops if the model keeps sending bad arguments")
+        elif said:                     # it told the model about the failure instead of retrying the same call
             res.verdict = "REPROMPTED"
             shown = said if len(said) <= 160 else said[:157] + "..."
             res.detail = (f"told the model the reply failed instead of retrying exchange {at}: \"{shown}\" ({tries}); "

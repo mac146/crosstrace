@@ -215,3 +215,11 @@ def test_the_openai_agents_sdk_is_recognised_and_gets_its_own_timeout_advice():
     assert fixes.sdk_family(reqs) == "openai-agents"
     assert any("set_default_openai_client" in line for line in fixes.advice("HANG", "stream_stall", reqs))
     assert fixes.sdk_family([{"user-agent": "OpenAI/Python 3.50.0"}]) == "openai-python"              # unchanged
+
+
+def test_pydantic_ai_is_not_mistaken_for_the_javascript_vercel_sdk():
+    """Found on a real agent: "pydantic-ai/2.68.0" contains "ai/", so its HANG advice was `AbortSignal.timeout(...)`, a JavaScript API."""
+    from crosstrace import fixes
+    assert fixes.sdk_family([{"user-agent": "pydantic-ai/2.68.0"}]) == "pydantic-ai"
+    assert any("model_settings" in line for line in fixes.advice("HANG", "stream_stall", [{"user-agent": "pydantic-ai/2.68.0"}]))
+    assert fixes.sdk_family([{"user-agent": "ai/5.0.1"}]) == "vercel-ai" and fixes.sdk_family([{"user-agent": "ai-sdk/openai/2.0"}]) == "vercel-ai"

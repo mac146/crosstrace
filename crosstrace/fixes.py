@@ -15,7 +15,9 @@ def sdk_family(requests):
             return "openai-python"
         if "openai/js" in ua:
             return "openai-js"
-        if "ai-sdk" in ua or "ai/" in ua:
+        if "pydantic-ai" in ua:
+            return "pydantic-ai"
+        if "ai-sdk" in ua or ua.startswith("ai/") or " ai/" in ua:
             return "vercel-ai"
     return None
 
@@ -24,6 +26,8 @@ TIMEOUT = {
     "openai-python": "pass a read timeout: `OpenAI(timeout=httpx.Timeout(60.0, read=20.0))` (the default is 600 s); "
                      "with LangChain: `ChatOpenAI(timeout=30)`",
     "anthropic-python": "pass a read timeout: `Anthropic(timeout=httpx.Timeout(60.0, read=20.0))` (the default is 10 minutes)",
+    "pydantic-ai": "set a timeout in the model settings: `Agent(..., model_settings={\"timeout\": 20})` (the default is the openai client's 600 s). "
+                   "A stall in the middle of a stream is then raised, not retried: wrap the run in your own retry if the agent should recover",
     "openai-agents": "give the SDK a client with a read timeout: `set_default_openai_client(AsyncOpenAI(timeout=httpx.Timeout(60.0, read=20.0)))` "
                      "(the default is 600 s). A stall in the middle of a stream is then raised, not retried: wrap `Runner.run` in your own retry "
                      "if the agent should recover",
