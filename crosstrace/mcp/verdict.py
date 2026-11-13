@@ -5,7 +5,7 @@ and still print the right answer; recovering is not enough to pass.
 """
 
 from crosstrace.mcp.ledger import excess_writes
-from crosstrace.verdict import TrialResult
+from crosstrace.verdict import TrialResult, same_output
 
 
 def _show(tool, key, limit=60):
@@ -42,7 +42,7 @@ def classify_tool(fault, at, calls, ledger, exit_code, stdout, hang, healthy_std
         res.verdict, res.detail = "HANG", f"no exit within the budget after the response to {name} was lost"
     elif exit_code != 0:
         res.verdict, res.detail = "SURFACED", f"stopped with an error (exit {exit_code}) after the response to {name} was lost"
-    elif res.attempts > 1 and stdout.strip() == (healthy_stdout or "").strip():
+    elif res.attempts > 1 and same_output(stdout, healthy_stdout):
         res.verdict, res.detail = "RECOVERED", f"retried {name} and finished with the healthy output"
     elif res.attempts > 1:
         res.verdict, res.detail = "RECOVERED_DIFFERENT", f"retried {name}; the output differs from the healthy run"

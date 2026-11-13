@@ -115,7 +115,7 @@ error, or carry on as if nothing happened?
 | `HANG` | never finished | problem |
 | `RETRY_STORM`, `IGNORED_RETRY_AFTER`, `WRONG_RETRY` | retried too often, too soon, or what can't succeed | problem |
 | `ENDED_EARLY`, `RECOVERED_DIFFERENT` | exited 0 without the failed step, or recovered with a different answer | review |
-| `REPROMPTED` | told the model its reply failed instead of retrying the same call (the text is shown, so you can judge it) | review |
+| `REPROMPTED` | answered the failure with a different request instead of retrying the same call: told the model its reply failed, had its tool arguments refused and the model told, or summarised after a context-length error (the text is shown, so you can judge it) | review |
 
 No LLM judge and no comparison of free-text answers: the verdict comes from which model call the agent made next, so it is the same
 every time. Faults are injected at every model call of every recorded path (nightly) or a fixed sample (pull requests), so an agent can't

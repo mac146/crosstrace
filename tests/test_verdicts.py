@@ -186,6 +186,58 @@ def test_a_cut_tool_call_the_framework_refused_is_a_review_but_one_it_may_have_r
         assert classify("tool_args_cut", 0, chat_recd, reqs, 1, "", False, "ok").verdict == "REPROMPTED"
 
 
+def test_starting_over_that_never_succeeds_is_decided_by_how_it_ends():
+    """Found on CrewAI: on a persistent error it retries the call, then restarts the whole task (its agent-level retry). That is not 'moved on'."""
+    recd = Recording(exchanges=[_ex(0), _ex(1), _ex(2)])
+    p = {"provider": "openai"}
+    base = [{**p, "idx": 0, "how": "in_order", "t": 0}, {**p, "idx": 1, "how": "in_order", "t": 1, "fault": "server_error", "attempt": 1},
+            {**p, "idx": 1, "how": "repeat", "t": 2, "attempt": 2, "fault": "server_error"}]
+    restart = base + [{**p, "idx": 0, "how": "repeat", "t": 3}, {**p, "idx": 1, "how": "repeat", "t": 4, "attempt": 3, "fault": "server_error"}]
+    r = classify("server_error", 1, recd, restart, 1, "", False, "ok")
+    assert r.verdict == "SURFACED" and "after starting over from exchange 0" in r.detail
+    assert not early_silent(1, restart[:4])                                  # the restart alone does not decide it
+    storm = restart + [{**p, "idx": 0, "how": "repeat", "t": 5 + i} if i % 2 == 0 else {**p, "idx": 1, "how": "repeat", "t": 5 + i,
+                       "fault": "server_error"} for i in range(10)]
+    assert classify("server_error", 1, recd, storm, 1, "", False, "ok").verdict == "RETRY_STORM"
+    # a different request, or one that matches nothing, still decides it at once
+    assert early_silent(1, base[:2] + [{**p, "idx": 2, "how": "in_order", "t": 2}])
+    assert early_silent(1, base[:2] + [{**p, "idx": None, "how": "miss", "t": 2}])
+
+
+def test_a_context_length_error_answered_with_a_different_request_is_a_review():
+    """Found on CrewAI: it sends a request asking the model to summarise the conversation, which is the right answer to the error."""
+    asked = {"messages": [{"role": "system", "content": "be brief"}, {"role": "user", "content": "the whole long task"}]}
+    recd = Recording(exchanges=[Exchange(idx=0, path="/v1/chat/completions", provider="openai", key="k0", state_key="s0", request=asked,
+                                         status=200, headers=[], stream=False, body="{}")])
+    p = {"provider": "openai"}
+
+    def verdict(fault, request, status=400):
+        reqs = [{**p, "idx": 0, "how": "in_order", "t": 0, "fault": fault, "attempt": 1, "status": status},
+                {**p, "idx": None, "how": "miss", "t": 1, "request": request}]
+        return classify(fault, 0, recd, reqs, 1, "", False, "ok")
+
+    summary = {"messages": [{"role": "system", "content": "You summarise agent conversations."},
+                            {"role": "user", "content": "Create a structured summary that preserves what is needed to continue."}]}
+    r = verdict("context_length", summary)
+    assert r.verdict == "REPROMPTED" and "different request" in r.detail and "structured summary" in r.detail
+    grown = {"messages": asked["messages"] + [{"role": "user", "content": "The request failed. Answer anyway."}]}
+    assert verdict("context_length", grown).verdict == "SILENT"                  # only added to the failed conversation: made it bigger
+    assert verdict("server_error", summary, status=500).verdict == "SILENT"      # the rule is for context-length errors only
+
+
+def test_the_same_answer_with_a_framework_warning_before_it_is_still_recovered():
+    from crosstrace.verdict import same_output
+    assert same_output("answer", "answer") and same_output("", "") and same_output("[Warning] call failed\nanswer", "answer")
+    assert not same_output("answer and more", "answer") and not same_output("something else", "answer") and not same_output("", "answer")
+    recd = Recording(exchanges=[_ex(0)])
+    p = {"provider": "openai"}
+    reqs = [{**p, "idx": 0, "how": "in_order", "t": 0, "fault": "server_error", "attempt": 1},
+            {**p, "idx": 0, "how": "repeat", "t": 1, "attempt": 2, "healed": "server_error"}]
+    r = classify("server_error", 0, recd, reqs, 0, "[Warning] call failed\nanswer", False, "answer")
+    assert r.verdict == "RECOVERED" and "extra output" in r.detail
+    assert classify("server_error", 0, recd, reqs, 0, "a different answer", False, "answer").verdict == "RECOVERED_DIFFERENT"
+
+
 def test_starting_over_is_a_recovery_but_a_changed_context_is_not():
     """An agent that recovers a failed model call by redoing its earlier steps is not SILENT: every request it sends is a recorded one."""
     recd = Recording(exchanges=[_ex(0), _ex(1), _ex(2)])
@@ -199,7 +251,8 @@ def test_starting_over_is_a_recovery_but_a_changed_context_is_not():
     assert classify("server_error", 2, recd, restart, 0, "different", False, "done").verdict == "RECOVERED_DIFFERENT"
     assert classify("server_error", 2, recd, restart, 1, "", False, "done").verdict == "SURFACED"
     # it starts over but never gets the failed call back: it moved on
-    assert classify("server_error", 2, recd, seq + restart[3:5], 0, "done", False, "done").verdict == "SILENT"
+    # it starts over but never gets the failed call back and exits 0: not 'moved on' (a framework's own retry looks like this), a review
+    assert classify("server_error", 2, recd, seq + restart[3:5], 0, "done", False, "done").verdict == "ENDED_EARLY"
     # a request that matches nothing in the recording means its context changed: SILENT even if the failed call is retried later
     changed = seq + [{**p, "idx": None, "how": "miss", "t": 3}, {**p, "idx": 2, "how": "repeat", "t": 4, "attempt": 2}]
     assert classify("server_error", 2, recd, changed, 0, "done", False, "done").verdict == "SILENT"

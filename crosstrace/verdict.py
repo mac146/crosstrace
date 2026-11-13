@@ -139,6 +139,12 @@ _REJECTION = re.compile(r"json_invalid|invalid json|invalid_json|jsondecodeerror
                         re.IGNORECASE)
 
 
+def same_output(output, healthy):
+    """True when a run printed the healthy output: exactly, or with extra lines before it (a framework's own warning about the failure)."""
+    out, ref = (output or "").strip(), (healthy or "").strip()
+    return out == ref or bool(ref) and out.endswith("\n" + ref)      # the answer starts on its own line: "a different answer" is not "answer"
+
+
 def _tool_result_texts(body):
     """The text of every tool result in a request's conversation, in order (chat completions, Anthropic and Responses)."""
     out = []
@@ -164,6 +170,16 @@ def _rejected_tool_results(faulted_request, next_request):
     result looks like a normal result, or there is none, the tool may have run on the cut arguments and this returns [] (SILENT)."""
     added = _tool_result_texts(next_request)[len(_tool_result_texts(faulted_request)):]
     return added if added and all(_REJECTION.search(t) for t in added) else []
+
+
+def _rewritten(faulted_request, next_request):
+    """The last message of the agent's next request when it is NOT the failed conversation with something added: the agent rewrote or
+    shrank its request (summarised, trimmed, started a different conversation). None when the next request only extends the failed one."""
+    before, after = _conversation(faulted_request), _conversation(next_request)
+    if not before or not after or after[:len(before)] == before:
+        return None
+    last = after[-1]
+    return _message_text(last) if isinstance(last, dict) else str(last)
 
 
 def _reprompt(faulted_request, next_request):
@@ -218,9 +234,10 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
     tries = f"{res.attempts - 1} retr{'y' if res.attempts == 2 else 'ies'}{via}" if res.attempts > 1 else "no retry"
     # An agent that starts over: before it retries the failed call it re-sends earlier exchanges, each one an exact repeat of a recorded
     # request. Nothing is missing from its context, so this is a recovery (the work done twice is for the write check to judge).
-    if success_pos is not None and other_pos is not None and other_pos < success_pos:
-        between = [r for r in after[:success_pos] if r.get("idx") != at]
-        if all(r.get("how") == "repeat" and r.get("idx") is not None and r["idx"] < at for r in between):
+    # (Also when it never succeeds, e.g. a persistent error: the agent keeps starting over until it gives up, and how it ends decides.)
+    if other_pos is not None and (success_pos is None or other_pos < success_pos):
+        between = [r for r in after[:success_pos if success_pos is not None else len(after)] if r.get("idx") != at]
+        if between and all(r.get("how") == "repeat" and r.get("idx") is not None and r["idx"] < at for r in between):
             tries += f", after starting over from exchange {min(r['idx'] for r in between)}"
             other_pos = None
 
@@ -252,6 +269,13 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
             shown = rejected[0] if len(rejected[0]) <= 160 else rejected[0][:157] + "..."
             res.detail = (f"the cut tool call was refused, not run, and the model was told: \"{shown}\" instead of retrying exchange {at} "
                           f"({tries}); check that this stops if the model keeps sending bad arguments")
+        elif fault == "context_length" and nxt.get("idx") is None and _rewritten(ex.request, nxt.get("request")) is not None:
+            # the right answer to a context-length error is a smaller request, not the same one again: it sent a different one
+            res.verdict = "REPROMPTED"
+            text = _rewritten(ex.request, nxt.get("request"))
+            shown = text if len(text) <= 160 else text[:157] + "..."
+            res.detail = (f"answered the context-length error with a different request instead of resending the same one ({tries}): "
+                          f"\"{shown}\"; check that it really shrinks the context and that this stops if the error keeps coming")
         elif said:                     # it told the model about the failure instead of retrying the same call
             res.verdict = "REPROMPTED"
             shown = said if len(said) <= 160 else said[:157] + "..."
@@ -285,8 +309,10 @@ def classify(fault, at, recording, requests, exit_code, stdout, hang, healthy_st
         return res
     if exit_code != 0:
         res.verdict, res.detail = "SURFACED", f"recovered exchange {at} ({tries}) but exited {exit_code}"
-    elif stdout.strip() == (healthy_stdout or "").strip():
+    elif same_output(stdout, healthy_stdout):
         res.verdict, res.detail = "RECOVERED", tries + (f", first after {res.retry_gaps_s[0]} s" if res.retry_gaps_s else "")
+        if stdout.strip() != (healthy_stdout or "").strip():
+            res.detail += "; the framework printed extra output before the answer"
     else:
         res.verdict, res.detail = "RECOVERED_DIFFERENT", f"recovered ({tries}) but the output differs from the healthy run"
     return res
@@ -304,6 +330,8 @@ def early_silent(at, requests):
             elif seen_fault:
                 success = True
         elif seen_fault and not success:
+            if r.get("how") == "repeat" and r.get("idx") is not None and r["idx"] < at:
+                continue                      # starting over (an exact repeat of an earlier exchange): not decided yet
             return True
     return False
 

@@ -24,7 +24,7 @@ def sdk_family(requests):
 
 TIMEOUT = {
     "openai-python": "pass a read timeout: `OpenAI(timeout=httpx.Timeout(60.0, read=20.0))` (the default is 600 s); "
-                     "with LangChain: `ChatOpenAI(timeout=30)`",
+                     "with LangChain: `ChatOpenAI(timeout=30)`; with CrewAI: `LLM(model=..., timeout=20)`",
     "anthropic-python": "pass a read timeout: `Anthropic(timeout=httpx.Timeout(60.0, read=20.0))` (the default is 10 minutes)",
     "pydantic-ai": "set a timeout in the model settings: `Agent(..., model_settings={\"timeout\": 20})` (the default is the openai client's 600 s). "
                    "A stall in the middle of a stream is then raised, not retried: wrap the run in your own retry if the agent should recover",
