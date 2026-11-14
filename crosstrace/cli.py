@@ -186,8 +186,12 @@ def cmd_test(a):
             return EXIT_USAGE
         log(f"live continuation: a request that matches nothing recorded goes to the real {'/'.join(sorted(live_keys))} API with your key "
             f"(at most {a.live_max_calls} calls per trial); this spends money")
+    if a.real_tools:
+        log("real tools: lost_response trials run the real MCP servers (the model is still replayed), so a retried write really happens twice; "
+            "point them at a test account or a sandbox")
     results = runner.run_planned(lambda pi: spec_for(cfg, replay_command(cfg, recs[pi]), timeout_s), recs, planned, timeout_s, jobs, progress,
-                                 continuation=cfg.continuation and not a.no_continue, live_keys=live_keys, live_max_calls=a.live_max_calls)
+                                 continuation=cfg.continuation and not a.no_continue, live_keys=live_keys, live_max_calls=a.live_max_calls,
+                                 real_tools=a.real_tools)
     rep = R.build(cfg, mode, recs, stab, results, time.monotonic() - t0, a.seed, not_applicable)
     print(R.for_terminal(R.render_text(rep)))
     if not a.no_save:
@@ -258,6 +262,8 @@ def build_parser():
     p.add_argument("--no-continue", action="store_true", help="do not answer requests that match nothing recorded after a fault (a 502 instead)")
     p.add_argument("--live", action="store_true", help="send requests that match nothing recorded after a fault to the REAL provider with the key in "
                    "OPENAI_API_KEY / ANTHROPIC_API_KEY, so an agent's re-prompt is answered by a real model (spends money)")
+    p.add_argument("--real-tools", action="store_true", help="run the real MCP servers in lost_response trials, so a retried write really "
+                   "happens twice and the server's answer to it is in the report (use a sandbox or test account)")
     p.add_argument("--live-max-calls", type=int, default=6, help="real calls allowed per trial before the agent is judged as not stopping (default 6)")
     p.add_argument("--no-save", action="store_true", help="do not write .crosstrace/reports/")
     p.add_argument("--quiet", action="store_true")
@@ -269,6 +275,7 @@ def build_parser():
     p = sub.add_parser("faults", help="list faults")
     p.set_defaults(fn=cmd_faults)
     p = sub.add_parser("mcp-wrap", help="run an MCP server through CrossTrace (put this in your agent's MCP config)")
+    p.add_argument("--name", help="name this server when the agent uses several (the same name is used for record and replay)")
     p.add_argument("server", nargs=argparse.REMAINDER, help="-- <the server's usual command and arguments>")
     p.set_defaults(fn=cmd_mcp_wrap)
     return ap
@@ -276,7 +283,7 @@ def build_parser():
 
 def cmd_mcp_wrap(a):
     from crosstrace.mcp import wrap
-    return wrap.main(a.server)
+    return wrap.main((["--name", a.name] if a.name else []) + a.server)
 
 
 def main(argv=None):

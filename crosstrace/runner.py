@@ -12,7 +12,8 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 
-from crosstrace.mcp.ledger import effective_lists, tool_calls
+from crosstrace.mcp.http import McpHttp, env_name
+from crosstrace.mcp.ledger import effective_lists, locate, tool_calls
 from crosstrace.mcp.verdict import classify_tool, write_check
 from crosstrace.mcp.wrap import ENV as MCP_ENV
 from crosstrace.proxy import FaultPlan, ProxyThread, make_fault
@@ -39,8 +40,9 @@ class AgentSpec:
         # "{proxy_url}" in a configured value: for agents that read their base URL from their own variable (e.g. OPENCODE_BASE_URL)
         env.update({k: v.replace("{proxy_url}", base_url) for k, v in self.env.items()})
         env.update(OPENAI_BASE_URL=base_url + "/v1", ANTHROPIC_BASE_URL=base_url)
-        if mcp_control:
-            env[MCP_ENV] = mcp_control
+        if mcp_control:                  # an McpRun: the control file for stdio wrappers, and the local URLs of any HTTP servers
+            env[MCP_ENV] = mcp_control.path
+            env.update(mcp_control.env)
         if replay:      # replay needs no real key (nothing leaves the machine), but SDKs refuse to start without one
             env.update(OPENAI_API_KEY="sk-crosstrace-replay", ANTHROPIC_API_KEY="sk-ant-crosstrace-replay")
         return env
@@ -98,16 +100,22 @@ class McpRun:
     Replay always gets one, even when nothing was recorded: a wrapper in replay mode never starts the real MCP server, so a replay
     cannot cause side effects."""
 
-    def __init__(self, spec, mode, calls=None, fault=None):
+    def __init__(self, spec, mode, calls=None, fault=None, real=False):
+        self.env, self.servers = {}, []
         self.dir = tempfile.mkdtemp(prefix="crosstrace-mcp-")
         self.path = os.path.join(self.dir, "control.json")
         self.ledger_path = os.path.join(self.dir, "ledger.jsonl")
         self.record_path = os.path.join(self.dir, "record.jsonl")
         writes, reads, _ = effective_lists(spec.mcp, calls)          # the server's own hints count: a read-only tool is not a write
         control = {"mode": mode, "record_path": self.record_path, "ledger": self.ledger_path, "calls": calls or [], "fault": fault,
-                   "writes": writes, "reads": reads}
+                   "writes": writes, "reads": reads, "real": real}
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(control, f)
+        # remote servers (streamable HTTP): a local stand-in for each, found by the agent through CROSSTRACE_MCP_URL_<NAME>
+        for name, url in (spec.mcp.get("http") or {}).items():
+            srv = McpHttp(name, url, control, "record" if mode == "record" else "real" if real else "replay")
+            self.env[env_name(name)] = srv.start()
+            self.servers.append(srv)
 
     @staticmethod
     def _read(path):
@@ -117,7 +125,15 @@ class McpRun:
             return [json.loads(line) for line in f if line.strip()]
 
     def ledger(self):
-        return self._read(self.ledger_path)
+        """The tool calls the run made, in arrival order per server. A `real` run also has what the server answered, folded into its call."""
+        out, by = [], {}
+        for e in self._read(self.ledger_path):
+            if "tool" in e:
+                out.append(e)
+                by[(e.get("server"), e["seq"])] = e
+            elif (e.get("server"), e["seq"]) in by:
+                by[(e.get("server"), e["seq"])]["reply"] = e["reply"]
+        return out
 
     def recorded(self):
         return self._read(self.record_path)
@@ -126,6 +142,8 @@ class McpRun:
         return self
 
     def __exit__(self, *exc):
+        for srv in self.servers:
+            srv.stop()
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
@@ -137,7 +155,7 @@ def _mcp_calls(recording):
 def record(spec, path=None):
     """One healthy run against the real providers (or spec.upstreams), recorded. Fails loudly if the agent fails."""
     with McpRun(spec, "record") as m, ProxyThread(mode="record", upstreams=spec.upstreams, masks=spec.masks) as p:
-        o = run_agent(spec, p.base_url, replay=False, mcp_control=m.path)
+        o = run_agent(spec, p.base_url, replay=False, mcp_control=m)
         mcp = m.recorded()
     if mcp:
         p.recording.meta["mcp"] = {"calls": mcp}
@@ -154,7 +172,7 @@ def record(spec, path=None):
 def replay(spec, recording):
     """One replay with no fault: (outcome, proxy) for inspection. The MCP ledger of the run is on p.mcp_ledger."""
     with ProxyThread(mode="replay", recording=recording, masks=spec.masks) as p, McpRun(spec, "replay", _mcp_calls(recording)) as m:
-        o = run_agent(spec, p.base_url, replay=True, mcp_control=m.path)
+        o = run_agent(spec, p.base_url, replay=True, mcp_control=m)
         p.mcp_ledger = m.ledger()
     return o, p
 
@@ -242,7 +260,7 @@ def trial(spec, recording, fault, at, heal_after=1, path=0, timeout_s=None, cont
             if attempts_at(at, p.requests) > STORM_LIMIT:
                 return "storm"
             return None
-        o = run_agent(spec, p.base_url, replay=True, watch=watch, timeout_s=timeout_s, mcp_control=m.path)
+        o = run_agent(spec, p.base_url, replay=True, watch=watch, timeout_s=timeout_s, mcp_control=m)
         ledger = m.ledger()
     res = classify(f.name, at, recording, list(p.requests), o.exit_code, o.stdout, o.timed_out, recording.meta.get("stdout", ""),
                    path=path, seconds=o.seconds)
@@ -251,15 +269,19 @@ def trial(spec, recording, fault, at, heal_after=1, path=0, timeout_s=None, cont
     return res
 
 
-def tool_trial(spec, recording, fault, at, path=0, timeout_s=None):
-    """Lose the response to the `at`-th MCP tool call (the tool ran, the agent never hears) and see what the agent does next."""
+def tool_trial(spec, recording, fault, at, path=0, timeout_s=None, real_tools=False):
+    """Lose the response to the `at`-th MCP tool call (the tool ran, the agent never hears) and see what the agent does next.
+
+    With real_tools the MCP servers really run (the model is still replayed), so a retry makes the server do the work a second time."""
     f = make_fault(fault) if isinstance(fault, str) else fault
     calls = _mcp_calls(recording)
     if not calls or not 0 <= at < len(tool_calls(calls)):
         return TrialResult(path=path, fault=f.name, at=at, verdict="N/A", detail=f"{f.name} does not apply: no MCP tool call {at} recorded")
-    control_fault = {"name": f.name, "at": at, "how": f.p["how"], "persistent": f.p["persistent"]}
-    with ProxyThread(mode="replay", recording=recording, masks=spec.masks) as p, McpRun(spec, "replay", calls, control_fault) as m:
-        o = run_agent(spec, p.base_url, replay=True, timeout_s=timeout_s, mcp_control=m.path)
+    server, local = locate(calls, at)           # each server counts its own calls, so the fault names a server and its n-th call
+    control_fault = {"name": f.name, "at": local, "server": server, "how": f.p["how"], "persistent": f.p["persistent"]}
+    with ProxyThread(mode="replay", recording=recording, masks=spec.masks) as p, \
+            McpRun(spec, "replay", calls, control_fault, real=real_tools) as m:
+        o = run_agent(spec, p.base_url, replay=True, timeout_s=timeout_s, mcp_control=m)
         ledger = m.ledger()
     writes, reads, idempotent = effective_lists(spec.mcp, calls)
     return classify_tool(f.name, at, calls, ledger, o.exit_code, o.stdout, o.timed_out, recording.meta.get("stdout", ""), path=path,
@@ -304,7 +326,8 @@ def plan_trials(recordings, faults, max_exchanges=0, seed=0, only_path=None, onl
     return out
 
 
-def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None, continuation=True, live_keys=None, live_max_calls=6):
+def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None, continuation=True, live_keys=None, live_max_calls=6,
+                real_tools=False):
     """Run planned trials, `jobs` at a time (each trial has its own proxy and agent process). Results in plan order."""
     from concurrent.futures import ThreadPoolExecutor
 
@@ -312,7 +335,7 @@ def run_planned(spec_for, recordings, planned, timeout_s, jobs=1, progress=None,
         pi, fs, k = item
         f = make_fault(fs.name, **effective_params(fs.name, fs.params, timeout_s))
         if f.tool_fault:
-            r = tool_trial(spec_for(pi), recordings[pi], f, k, path=pi, timeout_s=timeout_s)
+            r = tool_trial(spec_for(pi), recordings[pi], f, k, path=pi, timeout_s=timeout_s, real_tools=real_tools)
         else:
             r = trial(spec_for(pi), recordings[pi], f, k, heal_after=fs.heal, path=pi, timeout_s=timeout_s, continuation=continuation,
                       live_keys=live_keys, live_max_calls=live_max_calls)

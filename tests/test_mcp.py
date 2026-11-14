@@ -308,8 +308,11 @@ def test_lost_response_is_a_tool_fault_that_never_applies_to_model_exchanges():
 def test_config_reads_the_mcp_section_and_rejects_unknown_keys():
     base = {"agent": {"command": ["python", "agent.py"]}}
     cfg = C.parse({**base, "mcp": {"writes": ["run_report"], "reads": ["refund_status"]}}, ".")
-    assert cfg.mcp == {"writes": ["run_report"], "reads": ["refund_status"]}
-    assert C.parse(base, ".").mcp == {"writes": [], "reads": []}
+    assert cfg.mcp == {"writes": ["run_report"], "reads": ["refund_status"], "http": {}}
+    assert C.parse(base, ".").mcp == {"writes": [], "reads": [], "http": {}}
+    assert C.parse({**base, "mcp": {"http": {"shop": "https://x.example/mcp"}}}, ".").mcp["http"] == {"shop": "https://x.example/mcp"}
+    with pytest.raises(C.ConfigError):
+        C.parse({**base, "mcp": {"http": {"shop": "not-a-url"}}}, ".")
     with pytest.raises(C.ConfigError):
         C.parse({**base, "mcp": {"write": ["x"]}}, ".")
     with pytest.raises(C.ConfigError):

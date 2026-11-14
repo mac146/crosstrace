@@ -19,11 +19,16 @@ def write_check(res, calls, ledger, writes=(), reads=(), idempotent=()):
     if not extra:
         return res
     tool, key, expected, got = max(extra, key=lambda e: e[3] - e[2])
+    # a run against the real server saw it answer the repeat: that is the evidence the double write is real, not only counted
+    answers = [e["reply"] for e in ledger if e.get("write") and (e["tool"], e["args_key"]) == (tool, key) and e.get("reply")]
     before = res.verdict
     new = "a write the healthy run never made" if expected == 0 else f"{expected} in the healthy run"
     res.detail = (f"{_show(tool, key)} ran {got} time(s), {new}"
                   + ("; the agent recovered and finished, but the write was repeated" if before in ("RECOVERED", "RECOVERED_DIFFERENT")
                      else f"; the run otherwise ended as {before}"))
+    if len(answers) > 1:
+        res.detail += f"; the real server ran it {len(answers)} times and answered the last one: {answers[-1]!r}"
+        res.observed["real_tools"] = True
     res.verdict = "DUPLICATE"
     return res
 
@@ -36,7 +41,7 @@ def classify_tool(fault, at, calls, ledger, exit_code, stdout, hang, healthy_std
         res.verdict, res.detail = "NOT_REACHED", f"the agent never made tool call {at}"
         return res
     key = (lost["tool"], lost["args_key"])
-    res.attempts = sum(1 for e in ledger if (e["tool"], e["args_key"]) == key)
+    res.attempts = sum(1 for e in ledger if (e["tool"], e["args_key"]) == key and e.get("server") == lost.get("server"))
     name = _show(*key)
     if hang:
         res.verdict, res.detail = "HANG", f"no exit within the budget after the response to {name} was lost"

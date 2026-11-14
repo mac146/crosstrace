@@ -65,6 +65,27 @@ def call_key(call):
     return p.get("name"), args_key(p.get("arguments"))
 
 
+def locate(calls, at):
+    """(server, index among that server's tool calls) for the `at`-th tool call of a recording. `server` is None for a single unnamed server.
+    With several wrapped servers each wrapper process counts only its own calls, so a fault is aimed at one server's n-th call."""
+    tc = tool_calls(calls)
+    server = tc[at].get("server")
+    return server, sum(1 for c in tc[:at] if c.get("server") == server)
+
+
+def reply_text(resp, limit=160):
+    """A short text for a tool call's response (a result or an error), for reports."""
+    if not isinstance(resp, dict):
+        return ""
+    if resp.get("error"):
+        text = (resp["error"] or {}).get("message", "") if isinstance(resp["error"], dict) else str(resp["error"])
+    else:
+        content = (resp.get("result") or {}).get("content") or []
+        text = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
 def tool_hints(calls):
     """What the server itself says about its tools, from the recorded tools/list: ({read-only tools}, {idempotent tools}).
 
@@ -99,7 +120,9 @@ def excess_writes(calls, ledger, writes=(), reads=(), idempotent=()):
 
     A tool the server declares idempotent is skipped: running it again changes nothing. So is a call whose arguments carry an idempotency key:
     repeating it with the same key is what the key is for (the report does not claim the server honours it)."""
-    expected = Counter(k for k in map(call_key, tool_calls(calls)) if is_write(k[0], writes, reads) and k[0] not in idempotent)
-    executed = Counter((e["tool"], e["args_key"]) for e in ledger if e.get("write") and e["tool"] not in idempotent
+    # counted per server: two servers may both have a tool called "send" with the same arguments
+    expected = Counter((c.get("server"),) + call_key(c) for c in tool_calls(calls)
+                       if is_write(call_key(c)[0], writes, reads) and call_key(c)[0] not in idempotent)
+    executed = Counter((e.get("server"), e["tool"], e["args_key"]) for e in ledger if e.get("write") and e["tool"] not in idempotent
                        and not carries_idempotency_key(e["args_key"]))
-    return [(tool, key, expected.get((tool, key), 0), n) for (tool, key), n in executed.items() if n > expected.get((tool, key), 0)]
+    return [(tool, key, expected.get((srv, tool, key), 0), n) for (srv, tool, key), n in executed.items() if n > expected.get((srv, tool, key), 0)]

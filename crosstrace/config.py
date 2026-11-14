@@ -132,6 +132,16 @@ def _check_keys(where, d, allowed):
         raise ConfigError(f"{where}: unknown key(s) {', '.join(sorted(unknown))}; allowed: {', '.join(sorted(allowed))}")
 
 
+def _http_servers(value):
+    """[mcp.http]: {name: url} for remote MCP servers (streamable HTTP)."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) and v.startswith(("http://", "https://"))
+                                              for k, v in value.items()):
+        raise ConfigError("[mcp.http]: name = \"https://host/path\" for each remote MCP server")
+    return dict(value)
+
+
 def _sdk(value):
     from crosstrace.fixes import TIMEOUT, COMPLETION
     if value is None:
@@ -176,7 +186,7 @@ def load(path=None):
 def parse(d, root):
     _check_keys("crosstrace.toml", d, {"agent", "record", "replay", "test", "modes", "faults", "mcp"})
     mcp = d.get("mcp") or {}
-    _check_keys("[mcp]", mcp, {"writes", "reads"})
+    _check_keys("[mcp]", mcp, {"writes", "reads", "http"})
     for key in ("writes", "reads"):
         if not isinstance(mcp.get(key, []), list) or not all(isinstance(x, str) for x in mcp.get(key, [])):
             raise ConfigError(f"[mcp] {key}: a list of tool names")
@@ -233,7 +243,7 @@ def parse(d, root):
                   cwd=os.path.join(root, agent.get("cwd", ".")), env={k: str(v) for k, v in (agent.get("env") or {}).items()},
                   runs=max(1, int(rec.get("runs", 1))), upstreams=dict(upstreams), masks=list(rep.get("masks", [])), allow=allow,
                   trial_timeout_s=test.get("trial_timeout_s"), modes=modes, fault_params=fault_params,
-                  mcp={"writes": list(mcp.get("writes", [])), "reads": list(mcp.get("reads", []))}, continuation=bool(test.get("continue", True)), sdk=_sdk(agent.get("sdk")))
+                  mcp={"writes": list(mcp.get("writes", [])), "reads": list(mcp.get("reads", [])), "http": _http_servers(mcp.get("http"))}, continuation=bool(test.get("continue", True)), sdk=_sdk(agent.get("sdk")))
 
 
 def template(command):

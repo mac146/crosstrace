@@ -51,9 +51,23 @@ CrossTrace the wrapper just runs the server. Under `crosstrace record` it passes
 response; under `crosstrace test` it answers from the recording and never starts the real server.
 
 Your MCP client must give the wrapper `CROSSTRACE_MCP` (CrossTrace sets it for the agent process). Clients that start servers with a reduced
-environment, such as the official Python SDK, need it passed on explicitly. One wrapped server per agent.
+environment, such as the official Python SDK, need it passed on explicitly. With several servers, name each wrapper:
+`["crosstrace", "mcp-wrap", "--name", "github", "--", ...]`; recorded calls carry the name and each wrapper replays only its own.
 
-`lost_response` (`[faults.lost_response]`: `how = "error"` (default, a transport error) or `"silent"` (nothing; an agent with no tool timeout
+**Remote servers (streamable HTTP).** List each URL in `crosstrace.toml` and have your agent connect to the address CrossTrace gives it:
+
+```toml
+[mcp.http]
+shop = "https://mcp.example.com/mcp"      # the agent reads CROSSTRACE_MCP_URL_SHOP (falling back to the real URL)
+```
+
+Under `record` a local stand-in forwards to the real URL (your headers and tokens pass through) and records the exchange; under `test` it
+answers from the recording and never calls the server. A GET gets 405 (no server-to-client stream).
+
+`crosstrace test --real-tools` runs the real MCP servers in `lost_response` trials (the model stays replayed), so a retried write really
+happens twice and the report says what the server answered. Use a test account or a sandbox.
+
+`lost_response` (`[faults.lost_response]`: `how = "error"` (default: a transport error, or a 504 over HTTP), `"drop"` (HTTP only: the connection is closed with no reply) or `"silent"` (nothing; an agent with no tool timeout
 hangs), `persistent = true` to keep failing the retries) loses the response to each recorded tool call in turn. The tool counts as having run.
 
 `DUPLICATE`: a write ran more often than in the healthy run. It is checked in every trial, including model faults, so an agent that recovers

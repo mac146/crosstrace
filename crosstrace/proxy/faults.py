@@ -454,15 +454,15 @@ class MalformedBody(Fault):
 
 
 class LostResponse(Fault):
-    """MCP tool call: the tool ran, but its response never reaches the agent (how=error: a transport error; how=silent: nothing at all).
+    """MCP tool call: the tool ran, but its response never reaches the agent (how=error: a transport error, over HTTP a 504 gateway timeout; how=silent: nothing at all; how=drop: over HTTP the connection is closed with no reply).
     Needs the MCP server to be launched through `crosstrace mcp-wrap`. Counts every write the agent makes afterwards."""
     name, defaults = "lost_response", {"how": "error", "persistent": False}
     tool_fault = True
 
     def __init__(self, **params):
         super().__init__(**params)
-        if self.p["how"] not in ("error", "silent"):
-            raise ValueError("lost_response: how must be \"error\" or \"silent\"")
+        if self.p["how"] not in ("error", "silent", "drop"):
+            raise ValueError("lost_response: how must be \"error\", \"silent\" or \"drop\"")
 
     def applies(self, ex):
         return False                                    # applies to MCP tool calls, never to a model exchange

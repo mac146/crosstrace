@@ -30,4 +30,5 @@ def refund_status(customer_id: str) -> str:
 
 
 if __name__ == "__main__":
-    server.run()
+    port = os.environ.get("REFUND_HTTP_PORT")            # set: serve over streamable HTTP at http://127.0.0.1:<port>/mcp instead of stdio
+    server.run("streamable-http", port=int(port)) if port else server.run()

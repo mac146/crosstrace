@@ -18,6 +18,7 @@ import sys
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
 from openai import APIError, OpenAI
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -58,26 +59,36 @@ async def flow(session, model, tools, mode):
     return model.chat.completions.create(model="mock", messages=messages, tools=tools).choices[0].message.content
 
 
-async def main(mode):
+async def main(mode, http=False):
+    model = OpenAI(max_retries=0 if mode == "restart" else 2)         # restart handles model failures itself
+    if http:                # a remote server: CrossTrace gives the address of its stand-in in CROSSTRACE_MCP_URL_REFUNDS
+        url = os.environ.get("CROSSTRACE_MCP_URL_REFUNDS") or os.environ["REFUND_URL"]
+        async with streamable_http_client(url) as streams, ClientSession(streams[0], streams[1]) as session:
+            return await run(session, model, mode)
     env = {k: v for k, v in os.environ.items() if k in ("CROSSTRACE_MCP", "REFUND_LEDGER", "PATH", "HOME", "PYTHONPATH")}
     params = StdioServerParameters(command=sys.executable, args=["-m", "crosstrace", "mcp-wrap", "--", sys.executable,
                                                                    os.path.join(HERE, "server.py")], env=env)
-    model = OpenAI(max_retries=0 if mode == "restart" else 2)         # restart handles model failures itself
     async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
-        tools = None
-        for attempt in range(2 if mode == "restart" else 1):
-            try:
-                if tools is None:
-                    await session.initialize()
-                    tools = openai_tools(await session.list_tools())
-                print(await flow(session, model, tools, mode))
-                return
-            except APIError as exc:
-                print(f"model call failed ({exc}); starting over", file=sys.stderr)
-        raise RuntimeError("the model call failed")
+        return await run(session, model, mode)
+
+
+async def run(session, model, mode):
+    tools = None
+    for attempt in range(2 if mode == "restart" else 1):
+        try:
+            if tools is None:
+                await session.initialize()
+                tools = openai_tools(await session.list_tools())
+            print(await flow(session, model, tools, mode))
+            return
+        except APIError as exc:
+            print(f"model call failed ({exc}); starting over", file=sys.stderr)
+    raise RuntimeError("the model call failed")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["naive", "careful", "restart"], default="naive")
-    sys.exit(asyncio.run(main(ap.parse_args().mode)) or 0)
+    ap.add_argument("--transport", choices=["stdio", "http"], default="stdio")
+    args = ap.parse_args()
+    sys.exit(asyncio.run(main(args.mode, args.transport == "http")) or 0)

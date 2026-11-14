@@ -160,7 +160,7 @@ Details: [docs/cli.md](docs/cli.md). Fault list: `crosstrace faults`.
 Early (v0.1). Tested end to end on the example agents here and the SDK matrix above; not yet on anyone else's production agent. If you
 try it on yours, an issue with what it found (or got wrong) is the most useful thing you can send.
 
-- Model calls: OpenAI chat completions and Responses, Anthropic Messages. Tool calls: MCP over stdio only, see above.
+- Model calls: OpenAI chat completions and Responses, Anthropic Messages. Tool calls: MCP over stdio and streamable HTTP, see above.
 - Python 3.11+. Your agent can be in any language; it just has to be runnable as a command.
 - The healthy run must be repeatable enough to replay. Random values in prompts need a mask; heavy run-to-run variation in what your
   agent does needs several recorded runs.
@@ -170,9 +170,11 @@ try it on yours, an issue with what it found (or got wrong) is the most useful t
 A model call that fails is annoying. A tool call that **succeeded but whose response was lost** can do damage: the email was sent, the
 card was charged, the form was submitted, the reply never reached the agent, and a retry does it a second time.
 
-CrossTrace tests this for MCP servers that run over stdio. One change in your agent's MCP config: launch the server as
-`crosstrace mcp-wrap -- <its usual command>`. The wrapper records the tool calls in `crosstrace record`, and in `crosstrace test` it
-**replays them without starting the real server**, so a test cannot cause a side effect.
+CrossTrace tests this for MCP servers over stdio and over streamable HTTP. For a stdio server, one change in your agent's MCP config:
+launch it as `crosstrace mcp-wrap -- <its usual command>`. For a remote server, list its URL in `[mcp.http]` and have the agent read its
+server address from `CROSSTRACE_MCP_URL_<NAME>`. The wrapper (or the local stand-in for the URL) records the tool calls in
+`crosstrace record`, and in `crosstrace test` it **replays them without starting or calling the real server**, so a test cannot cause a
+side effect. An agent with several servers names each one (`mcp-wrap --name github -- ...`, or the key in `[mcp.http]`).
 
 - **`lost_response`:** one tool call is made (and counted), and its reply is replaced by a transport error. Then we watch what the agent does.
 - **Write counting:** every call to a tool that changes something is logged. A write that ran more often than in the healthy run is a
@@ -195,7 +197,11 @@ Runnable without any key: [examples/mcp_agents](examples/mcp_agents) (`pip insta
 trials placed none. Losing the response to the click made the retrying agent **DUPLICATE** and the checking agent stop. That agent was
 scripted, so it tests the tool-call handling, not how well a model drives a browser. **What this does not do yet:**
 
-- Only stdio MCP servers, and one wrapped server per agent. Servers over streamable HTTP are not covered.
+- Streamable HTTP is covered for what an agent sends as a POST (answered as JSON or an event stream). A server that pushes messages on its
+  own GET stream is not: that stream gets a 405, which the protocol allows. Checked against the official Python SDK's server and client only.
+  A lost response over HTTP is a 504 by default; with `how = "drop"` the connection is closed, which the official client turns into a crash
+  of the whole session, so the agent cannot retry at all.
+- Several servers are handled by name. Each name must be used in both `record` and `test`; two unnamed stdio servers are not told apart.
 - Your MCP client must start the wrapper with `CROSSTRACE_MCP` in its environment. The official Python SDK starts servers with a reduced
   environment, so pass it on (the example does).
 - Replay cannot answer a state check. An agent that asks a read tool "did it go through?" before retrying gets the recorded answer, or
@@ -203,8 +209,10 @@ scripted, so it tests the tool-call handling, not how well a model drives a brow
 - A retry counts as a repeat unless the server declares the tool idempotent (`idempotentHint`) or the call carries an idempotency key as a
   top-level argument (`idempotency_key`, `request_id`, `client_token` and similar). CrossTrace takes the key at its word: it cannot tell
   whether the server honours it. The official Playwright server declares `readOnlyHint` for 6 of its 25 tools and no `idempotentHint`.
-- The repeat is counted in replay, from a log of the tool calls. CrossTrace does not run a second real click to show the site receiving two
-  orders; it counts the second call the agent made.
+- By default the repeat is counted in replay, from a log of the tool calls. `crosstrace test --real-tools` runs the real servers in the
+  `lost_response` trials (the model is still replayed), so the retry really happens twice and the report quotes what the server answered.
+  It is opt-in because it does the work for real: point it at a test account or a sandbox. Model-fault trials always stay in replay. If the
+  real server answers differently from the recording, the agent's next model request may match nothing recorded.
 - The lost response is a transport error on a live session, not a dead server process.
 
 ## Background
