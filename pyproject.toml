@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crosstrace"
-version = "0.1.0.dev0"            # keep equal to crosstrace/__init__.py
+version = "0.1.0"            # keep equal to crosstrace/__init__.py
 description = "Find the failures your AI agent hides: replay real runs with byte-level provider faults and get a verdict for each"
 readme = "PYPI.md"                # short, with absolute links (the repo README has relative ones that would break on PyPI)
 requires-python = ">=3.11"
