@@ -64,6 +64,7 @@ allow = []
 # [mcp]
 # writes = ["run_report"]
 # reads = ["refund_status"]
+# real = true            # only if these servers run against a test account or sandbox: lost_response trials then call them for real
 '''
 
 
@@ -186,7 +187,7 @@ def load(path=None):
 def parse(d, root):
     _check_keys("crosstrace.toml", d, {"agent", "record", "replay", "test", "modes", "faults", "mcp"})
     mcp = d.get("mcp") or {}
-    _check_keys("[mcp]", mcp, {"writes", "reads", "http"})
+    _check_keys("[mcp]", mcp, {"writes", "reads", "http", "real"})
     for key in ("writes", "reads"):
         if not isinstance(mcp.get(key, []), list) or not all(isinstance(x, str) for x in mcp.get(key, [])):
             raise ConfigError(f"[mcp] {key}: a list of tool names")
@@ -243,7 +244,7 @@ def parse(d, root):
                   cwd=os.path.join(root, agent.get("cwd", ".")), env={k: str(v) for k, v in (agent.get("env") or {}).items()},
                   runs=max(1, int(rec.get("runs", 1))), upstreams=dict(upstreams), masks=list(rep.get("masks", [])), allow=allow,
                   trial_timeout_s=test.get("trial_timeout_s"), modes=modes, fault_params=fault_params,
-                  mcp={"writes": list(mcp.get("writes", [])), "reads": list(mcp.get("reads", [])), "http": _http_servers(mcp.get("http"))}, continuation=bool(test.get("continue", True)), sdk=_sdk(agent.get("sdk")))
+                  mcp={"writes": list(mcp.get("writes", [])), "reads": list(mcp.get("reads", [])), "http": _http_servers(mcp.get("http")), "real": bool(mcp.get("real", False))}, continuation=bool(test.get("continue", True)), sdk=_sdk(agent.get("sdk")))
 
 
 def template(command):

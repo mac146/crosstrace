@@ -211,7 +211,8 @@ scripted, so it tests the tool-call handling, not how well a model drives a brow
   whether the server honours it. The official Playwright server declares `readOnlyHint` for 6 of its 25 tools and no `idempotentHint`.
 - By default the repeat is counted in replay, from a log of the tool calls. `crosstrace test --real-tools` runs the real servers in the
   `lost_response` trials (the model is still replayed), so the retry really happens twice and the report quotes what the server answered.
-  It is opt-in because it does the work for real: point it at a test account or a sandbox. Model-fault trials always stay in replay. If the
+  It is opt-in because it does the work for real: point it at a test account or a sandbox. Once they are, set `[mcp] real = true` and every
+  run, CI included, shows the double write for real (`--no-real-tools` turns it off for one run). Model-fault trials always stay in replay. If the
   real server answers differently from the recording, the agent's next model request may match nothing recorded.
 - The lost response is a transport error on a live session, not a dead server process.
 

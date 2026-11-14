@@ -186,12 +186,13 @@ def cmd_test(a):
             return EXIT_USAGE
         log(f"live continuation: a request that matches nothing recorded goes to the real {'/'.join(sorted(live_keys))} API with your key "
             f"(at most {a.live_max_calls} calls per trial); this spends money")
-    if a.real_tools:
+    real_tools = (a.real_tools or bool(cfg.mcp.get("real"))) and not a.no_real_tools
+    if real_tools:
         log("real tools: lost_response trials run the real MCP servers (the model is still replayed), so a retried write really happens twice; "
             "point them at a test account or a sandbox")
     results = runner.run_planned(lambda pi: spec_for(cfg, replay_command(cfg, recs[pi]), timeout_s), recs, planned, timeout_s, jobs, progress,
                                  continuation=cfg.continuation and not a.no_continue, live_keys=live_keys, live_max_calls=a.live_max_calls,
-                                 real_tools=a.real_tools)
+                                 real_tools=real_tools)
     rep = R.build(cfg, mode, recs, stab, results, time.monotonic() - t0, a.seed, not_applicable)
     print(R.for_terminal(R.render_text(rep)))
     if not a.no_save:
@@ -262,6 +263,7 @@ def build_parser():
     p.add_argument("--no-continue", action="store_true", help="do not answer requests that match nothing recorded after a fault (a 502 instead)")
     p.add_argument("--live", action="store_true", help="send requests that match nothing recorded after a fault to the REAL provider with the key in "
                    "OPENAI_API_KEY / ANTHROPIC_API_KEY, so an agent's re-prompt is answered by a real model (spends money)")
+    p.add_argument("--no-real-tools", action="store_true", help="stay in replay even if [mcp] real = true")
     p.add_argument("--real-tools", action="store_true", help="run the real MCP servers in lost_response trials, so a retried write really "
                    "happens twice and the server's answer to it is in the report (use a sandbox or test account)")
     p.add_argument("--live-max-calls", type=int, default=6, help="real calls allowed per trial before the agent is judged as not stopping (default 6)")
