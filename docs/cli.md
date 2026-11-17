@@ -111,7 +111,9 @@ crosstrace test --path 0 --fault stream_cut_clean --at 2
 ## Replay stability
 
 Before any fault, each recording is replayed with no fault and must match exactly. If a prompt contains a value that changes on every run
-(a random id, a counter), the check names the field and both values; add a regex for it to `[replay] masks`. Timestamps and UUIDs are
+(a random id, a counter), the check names the field and both values and prints a ready-to-paste `[replay] masks = [...]` line. The regex is built from the two
+values and checked to make them equal before it is offered; it keeps a few characters of context so it does not mask unrelated text. Read it
+before pasting: it cannot know whether a value that differs was meant to differ. Timestamps and UUIDs are
 masked by default. An unstable recording is a setup error (exit 3), never a pass.
 
 ## Exit codes

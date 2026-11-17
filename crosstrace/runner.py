@@ -12,6 +12,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 
+from crosstrace.masks import suggest_mask
 from crosstrace.mcp.http import McpHttp, env_name
 from crosstrace.mcp.ledger import effective_lists, locate, tool_calls
 from crosstrace.mcp.verdict import classify_tool, write_check
@@ -177,23 +178,39 @@ def replay(spec, recording):
     return o, p
 
 
-def json_diff(a, b, path="", limit=3):
-    """Paths where two JSON values differ, with short values: [(path, a, b)]."""
+def json_diff(a, b, path="", limit=3, raw=False):
+    """Paths where two JSON values differ, with short values: [(path, a, b)]. raw=True keeps the whole values."""
     out = []
     if isinstance(a, dict) and isinstance(b, dict):
         for k in sorted(set(a) | set(b)):
-            out += json_diff(a.get(k), b.get(k), f"{path}.{k}" if path else k, limit - len(out))
+            out += json_diff(a.get(k), b.get(k), f"{path}.{k}" if path else k, limit - len(out), raw)
             if len(out) >= limit:
                 break
     elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
         for i, (x, y) in enumerate(zip(a, b)):
-            out += json_diff(x, y, f"{path}[{i}]", limit - len(out))
+            out += json_diff(x, y, f"{path}[{i}]", limit - len(out), raw)
             if len(out) >= limit:
                 break
     elif a != b:
-        short = lambda v: (repr(v)[:77] + "...") if len(repr(v)) > 80 else repr(v)
+        short = (lambda v: v) if raw else (lambda v: (repr(v)[:77] + "...") if len(repr(v)) > 80 else repr(v))
         out.append((path or "(root)", short(a), short(b)))
     return out[:limit]
+
+
+def not_started(spec, o, model):
+    """Why the agent never got as far as a model call, in words, or None when it did (or it did not crash). A missing package or command is
+    the commonest setup mistake, and "replay is not stable" would send the user looking in the wrong place."""
+    if model or o.exit_code == 0 or o.timed_out:
+        return None
+    lines = [x.strip() for x in o.stderr.strip().splitlines() if x.strip()]
+    last = lines[-1] if lines else f"exit {o.exit_code} with no output"
+    where = f"the command `{' '.join(spec.command)}` ran in the environment CrossTrace was started from"
+    if "No module named" in last or "Cannot find module" in last or "ModuleNotFoundError" in last or "ImportError" in last:
+        return (f"the agent could not start and made no model call: {last}. A package the agent needs is missing: {where}. Install it there, "
+                f"or point [agent] command at your project's own interpreter (e.g. .venv/bin/python agent.py)")
+    if isinstance(o.exit_code, int) and o.exit_code in (126, 127) or "not found" in last or "No such file" in last or "is not recognized" in last:
+        return f"the agent could not start: {last}. Check [agent] command and cwd: {where}"
+    return f"the agent crashed before making any model call: {last} ({where})"
 
 
 def stability(spec, recording, runs=2):
@@ -206,6 +223,10 @@ def stability(spec, recording, runs=2):
         model = [r for r in p.requests if r.get("provider")]
         ua += model
         misses = [r for r in model if r.get("how") == "miss"]
+        early = not_started(spec, o, model)
+        if early:                      # the other checks would only repeat this as "0 exchanges requested" and "output differs"
+            problems.append(f"replay {i + 1}: {early}")
+            continue
         if o.timed_out:
             problems.append(f"replay {i + 1}: timed out")
         if o.exit_code != recording.meta.get("exit_code", 0):
@@ -215,8 +236,10 @@ def stability(spec, recording, runs=2):
             ref = recording.exchanges[min(pos, len(recording.exchanges) - 1)]
             diffs = json_diff(ref.request, m.get("request", {}))
             where = "; ".join(f"{p_}: recorded {x} vs now {y}" for p_, x, y in diffs) or "body differs"
-            problems.append(f"replay {i + 1}: model call {pos} matched no recording ({where}); if this value changes on every run, "
-                            f"add a regex for it to [replay] masks")
+            hint = next((suggest_mask(x, y) for _, x, y in json_diff(ref.request, m.get("request", {}), raw=True)), None)
+            ask = (f"if this value changes on every run, add this to crosstrace.toml: [replay] masks = [{hint!r}]" if hint else
+                   "if this value changes on every run, add a regex for it to [replay] masks")
+            problems.append(f"replay {i + 1}: model call {pos} matched no recording ({where}); {ask}")
         rec_calls = _mcp_calls(recording)
         if rec_calls is not None:
             ledger = p.mcp_ledger
