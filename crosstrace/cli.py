@@ -141,6 +141,19 @@ def trial_budget(stability):
     return max(MIN_TRIAL_S, 4 * max(replays, default=0))
 
 
+def effective_budget(configured, stability):
+    """(seconds, why) for the trial budget. A configured `trial_timeout_s` is respected unless a fault-free replay on THIS machine takes more
+    than a third of it: trials run in parallel and start slower than a lone replay, so a budget that tight calls a slow machine's agent a
+    HANG. Then it is raised to 3x the slowest replay and `why` says so."""
+    if not configured:
+        return float(trial_budget(stability)), None
+    slowest = max((s["replay_seconds"] for s in stability if s.get("replay_seconds")), default=0)
+    if 3 * slowest > configured:
+        return float(round(3 * slowest)), (f"a healthy replay takes {slowest:.0f} s on this machine, so the configured trial budget of "
+                                           f"{configured:.0f} s would call slow starts a HANG; using {round(3 * slowest)} s")
+    return float(configured), None
+
+
 def cmd_test(a):
     cfg = C.load(a.config)
     if a.mode not in cfg.modes:
@@ -161,7 +174,9 @@ def cmd_test(a):
     log = (lambda *x: None) if a.quiet else (lambda m: print(m, file=sys.stderr, flush=True))
     log(f"checking replay of {len(recs)} recording(s)...")
     stab = [runner.stability(spec_for(cfg, replay_command(cfg, r)), r, runs=mode.stability_runs) for r in recs]
-    timeout_s = float(cfg.trial_timeout_s or trial_budget(stab))
+    timeout_s, raised = effective_budget(cfg.trial_timeout_s, stab)
+    if raised:
+        log(raised)
     stable_paths = {i for i, s in enumerate(stab) if s["stable"]}
     planned = [t for t in runner.plan_trials(recs, faults, mode.max_exchanges, a.seed, a.path, a.at) if t[0] in stable_paths]
     planned_labels = {fs.label for _, fs, _ in planned}

@@ -289,3 +289,13 @@ def test_the_report_says_which_sdk_it_wrote_the_advice_for():
     rep = R.build(cfg, mode, [rec], [{"stable": True, "problems": []}], [r], 1.0, 0, {})
     assert rep["sdk_note"].startswith("SDK: pydantic-ai (from the user-agent 'pydantic-ai/2.68.0'")
     assert "SDK: pydantic-ai" in R.for_terminal(R.render_text(rep)) and "SDK: pydantic-ai" in R.render_markdown(rep)
+
+
+def test_a_configured_trial_budget_is_raised_when_a_healthy_replay_would_barely_fit():
+    from crosstrace.cli import effective_budget
+    slow, fast = [{"replay_seconds": 12.0}], [{"replay_seconds": 1.0}]
+    assert effective_budget(15, fast) == (15.0, None)                      # a comfortable budget is left alone
+    budget, why = effective_budget(15, slow)
+    assert budget == 36.0 and "12 s" in why and "HANG" in why              # 3x the slowest replay, and it says why
+    assert effective_budget(None, fast)[0] == 60.0 and effective_budget(None, fast)[1] is None     # no setting: the adaptive default
+    assert effective_budget(90, slow) == (90.0, None)

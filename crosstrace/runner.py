@@ -69,12 +69,24 @@ def _kill(proc):
         pass
 
 
+def resolve_command(command, path):
+    """The command with its program looked up on `path` (the PATH the agent will get). On Windows, Popen looks a bare name like `python` up
+    first in the directory of the running executable, so from inside a venv it finds the BASE interpreter (the venv's python.exe is a
+    launcher), which has none of the agent's packages. POSIX already searches the PATH it is given; this makes Windows do the same."""
+    import shutil
+    if not command or os.path.dirname(command[0]):
+        return list(command)
+    found = shutil.which(command[0], path=path)
+    return [found] + list(command[1:]) if found else list(command)
+
+
 def run_agent(spec, base_url, replay, watch=None, poll_s=0.05, timeout_s=None, mcp_control=None):
     """Run the agent once. watch(): returns a reason string to stop it early (verdict already decided), else None."""
     timeout_s = timeout_s or spec.timeout_s
     with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as err:
         t0 = time.monotonic()
-        proc = subprocess.Popen(spec.command, cwd=spec.cwd, env=spec.environ(base_url, replay, mcp_control), stdout=out, stderr=err, text=True,
+        env = spec.environ(base_url, replay, mcp_control)
+        proc = subprocess.Popen(resolve_command(spec.command, env.get("PATH")), cwd=spec.cwd, env=env, stdout=out, stderr=err, text=True,
                                 start_new_session=(sys.platform != "win32"))
         timed_out, stopped = False, None
         while proc.poll() is None:

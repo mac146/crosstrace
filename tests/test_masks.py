@@ -50,3 +50,17 @@ def test_an_agent_that_cannot_start_is_reported_as_that_not_as_an_unstable_repla
     assert "crashed before making any model call" in not_started(spec, out(1, "ValueError: bad"), [])
     assert not_started(spec, out(1, "boom"), [{"provider": "openai"}]) is None          # it got as far as a model call: other checks apply
     assert not_started(spec, out(0, ""), []) is None and not_started(spec, out(1, "", True), []) is None
+
+
+def test_the_agent_command_is_looked_up_on_the_path_it_is_given(tmp_path):
+    import os
+    import stat
+    from crosstrace.runner import resolve_command
+    name = "ctfake.cmd" if os.name == "nt" else "ctfake"
+    exe = tmp_path / name
+    exe.write_text("@echo off\n" if os.name == "nt" else "#!/bin/sh\n")
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    got = resolve_command(["ctfake", "agent.py", "--x"], str(tmp_path))
+    assert os.path.samefile(got[0], exe) and got[1:] == ["agent.py", "--x"]
+    assert resolve_command(["nothing-like-this", "a"], str(tmp_path)) == ["nothing-like-this", "a"]      # not found: left for Popen to report
+    assert resolve_command(["./run.sh", "a"], str(tmp_path)) == ["./run.sh", "a"]                         # a path is used as given
