@@ -166,7 +166,7 @@ def run_live(cmd, control, name=None):
             info = r.track(msg)
             with lock:
                 pending[msg["id"]] = info
-        proc.stdin.write(line)
+        proc.stdin.write(line.rstrip("\r\n") + "\n")          # a client on Windows may send \r\n; the pipe adds its own, so never forward two
         proc.stdin.flush()
     try:
         proc.stdin.close()
@@ -205,7 +205,7 @@ def run_record(cmd, control, name=None):
                 params = {k: v for k, v in params.items() if k != "_meta"}                 # a progress token differs on every run
             with lock:
                 pending[msg["id"]] = (msg["method"], params)
-        proc.stdin.write(line)
+        proc.stdin.write(line.rstrip("\r\n") + "\n")          # a client on Windows may send \r\n; the pipe adds its own, so never forward two
         proc.stdin.flush()
     try:
         proc.stdin.close()
