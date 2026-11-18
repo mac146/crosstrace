@@ -66,6 +66,7 @@ def test_empty_events_give_none_not_zero():
     assert s["api_retx"] == 0 and s["llm_connects"] == 0
 
 
+@pytest.mark.skipif(not hasattr(time, "clock_gettime_ns"), reason="needs Linux clocks")
 def test_sync_clocks_pairs_clocks_closely():
     mono, wall, err = ebpf.sync_clocks()
     assert err < 1_000_000                                   # under 1 ms

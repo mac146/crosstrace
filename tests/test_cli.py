@@ -299,3 +299,10 @@ def test_a_configured_trial_budget_is_raised_when_a_healthy_replay_would_barely_
     assert budget == 36.0 and "12 s" in why and "HANG" in why              # 3x the slowest replay, and it says why
     assert effective_budget(None, fast)[0] == 60.0 and effective_budget(None, fast)[1] is None     # no setting: the adaptive default
     assert effective_budget(90, slow) == (90.0, None)
+
+
+def test_no_sdk_note_when_no_model_request_was_seen():
+    from crosstrace.fixes import describe_sdk
+    assert describe_sdk(None) is None and describe_sdk([]) is None and describe_sdk([{"user-agent": None}]) is None
+    assert "not recognised" in describe_sdk([{"user-agent": "my-own-client/1.0"}])             # a User-Agent that is unknown still gets the note
+    assert describe_sdk(None, "openai-python") == "SDK: openai-python (set in [agent] sdk)"      # a configured SDK is always shown

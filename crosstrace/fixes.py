@@ -33,8 +33,11 @@ def sdk_family(requests, override=None):
 
 
 def describe_sdk(requests, override=None):
-    """One line for the report: what was detected and how to correct it."""
+    """One line for the report: what was detected and how to correct it. None when no model request was seen (a tool-only failure): the SDK
+    plays no part there, and a note about it would only point at a setting that does not matter."""
     d = detect_sdk(requests, override)
+    if d["family"] is None and not d["user_agent"]:
+        return None
     if d["family"] and d["source"] == "config":
         return f"SDK: {d['family']} (set in [agent] sdk)"
     if d["family"]:

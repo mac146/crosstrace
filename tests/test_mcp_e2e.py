@@ -40,6 +40,8 @@ def demo(tmp_path_factory):
 
     try:
         rec = runner.record(spec("naive"))
+        # a trial budget that fits this machine: starting the agent takes ~1 s on a fast Linux box and more than 10 s on a slow Windows one
+        spec.budget = max(6.0, 3 * runner.replay(spec("naive"), rec)[0].seconds)
         yield spec, rec, ledger
     finally:
         srv.shutdown()
@@ -79,7 +81,7 @@ def test_careful_agent_stops_instead_of_repeating_the_write(demo):
 
 def test_silent_loss_hangs_an_agent_with_no_tool_timeout(demo):
     spec, rec, ledger = demo
-    r = runner.tool_trial(spec("careful"), rec, make_fault("lost_response", how="silent"), 0, timeout_s=6)
+    r = runner.tool_trial(spec("careful"), rec, make_fault("lost_response", how="silent"), 0, timeout_s=spec.budget)
     assert r.verdict == "HANG"
 
 

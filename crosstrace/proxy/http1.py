@@ -145,4 +145,13 @@ class ResponseWriter:
         if sock is not None:
             fmt = "HH" if sys.platform == "win32" else "ii"
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack(fmt, 1, 0))
+            if sys.platform == "win32":
+                # asyncio's Windows loop calls shutdown() before it closes, which sends a FIN: abort() alone is a graceful close there. Closing the
+                # socket itself while linger is 0 sends the RST; the transport is aborted below to clean up. (_sock is the wrapped socket.socket)
+                raw = getattr(sock, "_sock", None)
+                if raw is not None:
+                    try:
+                        raw.close()
+                    except OSError:
+                        pass
         self.w.transport.abort()

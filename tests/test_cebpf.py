@@ -1,6 +1,7 @@
 """Compiled collector: binary decoding (no root) and live parity with the bpftrace collector (needs the installed binary)."""
 import socket
 import struct
+import sys
 import threading
 import time
 
@@ -57,7 +58,8 @@ def test_arguments_reach_the_loader():
     assert a.count("--port") == 2 and "--dns-port" in a and "--reduce-rtt" in a and "--tcp-send" in a and "--libc-dns" in a
 
 
-@pytest.mark.skipif(not cebpf.available(), reason="needs the installed compiled collector (scripts/setup_sudoers.sh)")
+@pytest.mark.skipif(not sys.platform.startswith("linux") or not cebpf.available(),
+                    reason="needs Linux and the installed compiled collector (scripts/setup_sudoers.sh)")
 def test_live_connection_and_send_events_are_reported_with_our_process():
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
