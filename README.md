@@ -56,8 +56,10 @@ Every row is what CrossTrace reported after its verdicts were corrected against 
 | OpenAI Agents SDK (Responses API) | raised an error (it waits for the completed event) | hangs; `set_default_openai_client(AsyncOpenAI(timeout=...))` turns it into an error | errors before the stream recovered |
 | pydantic-ai | refused the cut tool call and told the model (one case: arguments were already complete and it ran the tool); printed a cut answer as complete, also for a Responses `incomplete` status | hangs; `model_settings={"timeout": ...}` turns it into an error | empty reply re-prompted |
 | CrewAI (native openai client) | printed a cut answer as complete | hangs; `LLM(timeout=...)` recovers | context-length error summarised and continued; a persistent outage retried 7+ times in about 3 s |
+| LlamaIndex (`FunctionAgent`) | carried a cut tool call forward with no retry (the tool then ran); **printed a cut answer as complete** | hangs (no read timeout) | errors before the stream recovered |
+| smolagents (`ToolCallingAgent`, `stream_outputs=True`) | refused a cut tool call (argument validation) and told the model; **returned a cut final answer as the result** | hangs (no read timeout) | errors before the stream recovered; in its default non-streaming mode every HTTP error was handled |
 
-The timeout fixes were run, not assumed (with 10 seconds). In the three streamed agents (LangGraph, the Agents SDK, pydantic-ai) a stall in the middle of a stream is raised, not retried.
+The timeout fixes were run, not assumed (with 10 seconds). In the three streamed agents (LangGraph, the Agents SDK, pydantic-ai) a stall in the middle of a stream is raised, not retried. LlamaIndex and smolagents were run on 2026-11-20 against their latest releases (llama-index-core 0.14.26, smolagents 1.26.0), recorded twice on separate runs with the same results.
 
 ## Try it (no API key)
 
